@@ -1,0 +1,22 @@
+[package]
+name = "mmap-sync"
+version = "1.0.0"
+edition = "2021"
+authors = ["Alex Bocharov <bocharov.alexandr@gmail.com>"]
+description = "A Rust package allowing sharing of data between processes in a wait-free and zero-copy fashion from mapped memory."
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/cloudflare/mmap-sync"
+keywords = ["memory-mapping", "synchronization", "multithreading", "interprocess", "wait-free", "zero-copy"]
+categories = ["os", "filesystem", "concurrency", "data-structures", "memory-management"]
+
+[dependencies]
+bytecheck = { version = "~0.6.8", default-features = false }
+memmap2 = "0.7.0"
+rkyv = { version = "0.7.40", features = ["validation", "strict"] }
+seahash = "4.1.0"
+thiserror = "1.0.30"
+
+[dev-dependencies]
+proptest = "1.0.0"
+rand = "0.8.5"
