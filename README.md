@@ -1,4 +1,5 @@
 # mmap-sync
+![build](https://img.shields.io/github/actions/workflow/status/cloudflare/mmap-sync/ci.yml?branch=main)
 [![docs.rs](https://docs.rs/mmap-sync/badge.svg)](https://docs.rs/mmap-sync)
 [![crates.io](https://img.shields.io/crates/v/mmap-sync.svg)](https://crates.io/crates/mmap-sync)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
