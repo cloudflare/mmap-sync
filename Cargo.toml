@@ -7,7 +7,7 @@ description = "A Rust package allowing sharing of data between processes in a wa
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/cloudflare/mmap-sync"
-keywords = ["memory-mapping", "synchronization", "multithreading", "interprocess", "wait-free", "zero-copy"]
+keywords = ["memory-mapping", "synchronization", "interprocess", "wait-free", "zero-copy"]
 categories = ["os", "filesystem", "concurrency", "data-structures", "memory-management"]
 
 [dependencies]
