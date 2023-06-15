@@ -1,10 +1,10 @@
 # mmap-sync
 [![docs.rs](https://docs.rs/mmap-sync/badge.svg)](https://docs.rs/mmap-sync)
-[![crates.io](https://img.shields.io/crates/v/mmap-sync.svg)](https://crates.io/crates/rkyv)
+[![crates.io](https://img.shields.io/crates/v/mmap-sync.svg)](https://crates.io/crates/mmap-sync)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 `mmap-sync` is a Rust crate designed to manage high-performance, concurrent data access between a single writer process and multiple reader processes, leveraging the benefits of memory-mapped files, wait-free synchronization, and zero-copy deserialization.
-We're using `mmap-sync` for large-scale machine learning, detailed in our blog post: ["Every Request, Every Microsecond: Scalable machine learning at Cloudflare"](https://example.com/blogpost).
+We're using `mmap-sync` for large-scale machine learning, detailed in our blog post: ["Every Request, Every Microsecond: Scalable machine learning at Cloudflare"](http://blog.cloudflare.com/scalable-machine-learning-at-cloudflare).
 
 ## Overview
 At the core of `mmap-sync` is a `Synchronizer` structure that offers a simple interface with "write" and "read" methods, allowing users to read and write any Rust struct (`T`) that implements or derives certain rkyv traits.
@@ -60,7 +60,7 @@ Check out the provided examples for detailed usage:
 * [Writer process example](examples/writer.rs): This example demonstrates how to define a Rust struct and write it into shared memory using `mmap-sync`.
 * [Reader process example](examples/reader.rs): This example shows how to read data written into shared memory by a writer process.
 
-These examples share a [common](examples/common.rs) module that defines the data structure being written and read.
+These examples share a [common](examples/common/mod.rs) module that defines the data structure being written and read.
 
 To run these examples, follow these steps:
 
