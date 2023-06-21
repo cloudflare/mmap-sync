@@ -1,6 +1,6 @@
 [package]
 name = "mmap-sync"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 authors = ["Alex Bocharov <bocharov.alexandr@gmail.com>"]
 description = "A Rust package allowing sharing of data between processes in a wait-free and zero-copy fashion from mapped memory."

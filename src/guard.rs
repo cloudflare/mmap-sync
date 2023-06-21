@@ -1,7 +1,17 @@
-//! The `guard` module provides a safe interface for accessing shared memory.
+//! The `guard` module manages read access to shared memory, utilizing RAII (Resource Acquisition
+//! Is Initialization) principles to control access lifecycle.
 //!
-//! It includes functionality for managing read and write access to the memory-mapped files, ensuring safety of data operations. It is leveraged by the `synchronizer` module to perform concurrent read/write operations.
-
+//! `ReadGuard` is the primary structure in this module. On creation, `ReadGuard` provides a
+//! reference to an entity in shared memory. This reference can be safely used until the
+//! `grace_duration` set in the `write` method of the `synchronizer` module expires.
+//!
+//! `ReadGuard` relinquishes memory access rights automatically when it goes out of scope and
+//! gets dropped, thus avoiding potential memory corruption due to lingering references.
+//! Therefore, users must ensure all `ReadGuard` instances are dropped before `grace_duration`
+//! expires.
+//!
+//! The `synchronizer` module utilizes this `guard` module to manage memory safety, allowing
+//! users to focus on their application logic.
 use rkyv::{Archive, Archived};
 use std::ops::Deref;
 

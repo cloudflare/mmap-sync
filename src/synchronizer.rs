@@ -70,9 +70,23 @@ impl Synchronizer {
         }
     }
 
-    /// Write given `entity` into the next available data file.
-    /// Returns number of bytes written to data file and a boolean flag, for diagnostic purposes,
-    /// indicating that we have reset our readers counter after a reader died without decrementing it.
+    /// Writes a given `entity` into the next available data file.
+    ///
+    /// Returns the number of bytes written to the data file and a boolean flag, for diagnostic
+    /// purposes, indicating whether the reader counter was reset due to a reader exiting without
+    /// decrementing it.
+    ///
+    /// # Parameters
+    /// - `entity`: The entity to be written to the data file.
+    /// - `grace_duration`: The maximum period to wait for readers to finish before resetting the
+    ///                     reader count to 0. This handles scenarios where a reader process has
+    ///                     crashed or exited abnormally, failing to decrement the reader count.
+    ///                     After the `grace_duration` has elapsed, if there are still active
+    ///                     readers, the reader count is reset to 0 to restore synchronization state.
+    ///
+    /// # Returns
+    /// A result containing a tuple of the number of bytes written and a boolean indicating whether
+    /// the reader count was reset, or a `SynchronizerError` if the operation fails.
     pub fn write<T>(
         &mut self,
         entity: &T,
@@ -142,11 +156,19 @@ impl Synchronizer {
         Ok((size, reset))
     }
 
-    /// Reads and returns `entity` struct from mapped memory wrapped in `ReadGuard`
+    /// Reads and returns an `entity` struct from mapped memory wrapped in `ReadGuard`.
     ///
     /// # Safety
-    /// This method marked unsafe because using returned result beyond `grace_duration`
-    /// may lead to memory corruption issues, so the caller must ensure prompt result disposal.
+    ///
+    /// This method is marked as unsafe due to the potential for memory corruption if the returned
+    /// result is used beyond the `grace_duration` set in the `write` method. The caller must ensure
+    /// the `ReadGuard` (and any references derived from it) are dropped before this time period
+    /// elapses to ensure safe operation.
+    ///
+    /// Additionally, the use of `unsafe` here is related to the internal use of the
+    /// `rkyv::archived_root` function, which has its own safety considerations. Particularly, it
+    /// assumes the byte slice provided to it accurately represents an archived object, and that the
+    /// root of the object is stored at the end of the slice.
     pub unsafe fn read<T>(&mut self) -> Result<ReadResult<T>, SynchronizerError>
     where
         T: Archive,
