@@ -6,7 +6,7 @@ use crate::synchronizer::SynchronizerError::*;
 /// - data size (<549 GB) - 39 bits
 /// - data checksum       - 24 bits
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct InstanceVersion(u64);
+pub struct InstanceVersion(pub(crate) u64);
 
 const DATA_SIZE_BITS: usize = 39;
 const DATA_CHECKSUM_BITS: usize = 24;

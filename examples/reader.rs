@@ -8,7 +8,7 @@ fn main() {
     let mut synchronizer = Synchronizer::new("/tmp/hello_world");
 
     // Read data from shared memory
-    let data = unsafe { synchronizer.read::<HelloWorld>() }.expect("failed to read data");
+    let data = unsafe { synchronizer.read::<HelloWorld>(false) }.expect("failed to read data");
 
     // Access fields of the struct
     println!("version: {} | messages: {:?}", data.version, data.messages);

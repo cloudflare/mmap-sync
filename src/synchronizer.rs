@@ -158,6 +158,11 @@ impl Synchronizer {
 
     /// Reads and returns an `entity` struct from mapped memory wrapped in `ReadGuard`.
     ///
+    /// # Parameters
+    /// - `check_bytes`: Whether to check that `entity` bytes can be safely read for type `T`,
+    ///                  `false` - bytes check will not be performed (faster, but less safe),
+    ///                  `true` - bytes check will be performed (slower, but safer).
+    ///
     /// # Safety
     ///
     /// This method is marked as unsafe due to the potential for memory corruption if the returned
@@ -169,7 +174,7 @@ impl Synchronizer {
     /// `rkyv::archived_root` function, which has its own safety considerations. Particularly, it
     /// assumes the byte slice provided to it accurately represents an archived object, and that the
     /// root of the object is stored at the end of the slice.
-    pub unsafe fn read<T>(&mut self) -> Result<ReadResult<T>, SynchronizerError>
+    pub unsafe fn read<T>(&mut self, check_bytes: bool) -> Result<ReadResult<T>, SynchronizerError>
     where
         T: Archive,
         T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
@@ -187,14 +192,28 @@ impl Synchronizer {
         let (data, switched) = self.data_container.data(version)?;
 
         // fetch entity from data using zero-copy deserialization
-        let entity = archived_root::<T>(data);
+        let entity = match check_bytes {
+            false => archived_root::<T>(data),
+            true => check_archived_root::<T>(data).map_err(|_| FailedEntityRead)?,
+        };
 
         Ok(ReadResult::new(guard, entity, switched))
+    }
+
+    /// Returns current `InstanceVersion` stored within the state, useful for detecting
+    /// whether synchronized `entity` has changed.
+    pub fn version(&mut self) -> Result<InstanceVersion, SynchronizerError> {
+        // fetch current state from mapped memory
+        let state = self.state_container.state(false)?;
+
+        // fetch current version
+        state.version()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::instance::InstanceVersion;
     use crate::synchronizer::Synchronizer;
     use bytecheck::CheckBytes;
     use rand::distributions::Uniform;
@@ -259,7 +278,7 @@ mod tests {
         let mut entity_generator = MockEntityGenerator::new(3);
 
         // check that `read` returns error when writer didn't write yet
-        let res = unsafe { reader.read::<MockEntity>() };
+        let res = unsafe { reader.read::<MockEntity>(false) };
         assert!(res.is_err());
         assert_eq!(
             res.err().unwrap().to_string(),
@@ -274,6 +293,10 @@ mod tests {
         assert_eq!(reset, false);
         assert!(Path::new(&state_path).exists());
         assert!(!Path::new(&data_path_1).exists());
+        assert_eq!(
+            reader.version().unwrap(),
+            InstanceVersion(15768700985330904896)
+        );
 
         // check that first time scoped `read` works correctly and switches the data
         fetch_and_assert_entity(&mut reader, &entity, true);
@@ -289,6 +312,10 @@ mod tests {
         assert!(Path::new(&state_path).exists());
         assert!(Path::new(&data_path_0).exists());
         assert!(Path::new(&data_path_1).exists());
+        assert_eq!(
+            reader.version().unwrap(),
+            InstanceVersion(7331894278219651425)
+        );
 
         // check that another scoped `read` works correctly and switches the data
         fetch_and_assert_entity(&mut reader, &entity, true);
@@ -298,11 +325,19 @@ mod tests {
         let (size, reset) = writer.write(&entity, Duration::from_secs(1)).unwrap();
         assert!(size > 0);
         assert_eq!(reset, false);
+        assert_eq!(
+            reader.version().unwrap(),
+            InstanceVersion(9949249822303202528)
+        );
 
         let entity = entity_generator.gen(200);
         let (size, reset) = writer.write(&entity, Duration::from_secs(1)).unwrap();
         assert!(size > 0);
         assert_eq!(reset, false);
+        assert_eq!(
+            reader.version().unwrap(),
+            InstanceVersion(16072265150643592177)
+        );
 
         fetch_and_assert_entity(&mut reader, &entity, true);
     }
@@ -312,7 +347,7 @@ mod tests {
         expected_entity: &MockEntity,
         expected_is_switched: bool,
     ) {
-        let actual_entity = unsafe { synchronizer.read::<MockEntity>().unwrap() };
+        let actual_entity = unsafe { synchronizer.read::<MockEntity>(false).unwrap() };
         assert_eq!(actual_entity.map, expected_entity.map);
         assert_eq!(actual_entity.version, expected_entity.version);
         assert_eq!(actual_entity.is_switched(), expected_is_switched);

@@ -11,6 +11,6 @@
 //! To get started with `mmap-sync`, please see the [examples](https://github.com/cloudflare/mmap-sync/tree/main/examples) provided.
 mod data;
 pub mod guard;
-mod instance;
+pub mod instance;
 mod state;
 pub mod synchronizer;
