@@ -14,6 +14,7 @@ const STATE_SIZE: usize = mem::size_of::<State>();
 const SLEEP_DURATION: Duration = Duration::from_secs(1);
 
 /// State stored in memory for synchronization using atomics
+#[repr(C)]
 pub(crate) struct State {
     /// Current data instance version
     version: AtomicU64,
