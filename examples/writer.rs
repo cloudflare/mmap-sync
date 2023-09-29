@@ -6,7 +6,7 @@ use std::time::Duration;
 
 fn main() {
     // Initialize the Synchronizer
-    let mut synchronizer = Synchronizer::new("/tmp/hello_world");
+    let mut synchronizer = Synchronizer::new("/tmp/hello_world".as_ref());
 
     // Define the data
     let data = HelloWorld {

@@ -10,6 +10,7 @@ use rkyv::ser::Serializer;
 use rkyv::validation::validators::DefaultValidator;
 use rkyv::{archived_root, check_archived_root, Archive, Serialize};
 use seahash::SeaHasher;
+use std::ffi::OsStr;
 use std::hash::Hasher;
 use std::time::Duration;
 use thiserror::Error;
@@ -62,11 +63,11 @@ pub enum SynchronizerError {
 type DefaultSerializer = AllocSerializer<1_000_000>;
 
 impl Synchronizer {
-    /// Create new instance of `Synchronizer` using given `path`
-    pub fn new(path: &str) -> Synchronizer {
+    /// Create new instance of `Synchronizer` using given `path_prefix`
+    pub fn new(path_prefix: &OsStr) -> Synchronizer {
         Synchronizer {
-            state_container: StateContainer::new(path),
-            data_container: DataContainer::new(path.to_string()),
+            state_container: StateContainer::new(path_prefix),
+            data_container: DataContainer::new(path_prefix),
         }
     }
 
@@ -271,8 +272,8 @@ mod tests {
         fs::remove_file(&data_path_1).unwrap_or_default();
 
         // create writer and reader synchronizers
-        let mut writer = Synchronizer::new(path);
-        let mut reader = Synchronizer::new(path);
+        let mut writer = Synchronizer::new(path.as_ref());
+        let mut reader = Synchronizer::new(path.as_ref());
 
         // use deterministic random generator for reproducible results
         let mut entity_generator = MockEntityGenerator::new(3);

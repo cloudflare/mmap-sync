@@ -1,4 +1,5 @@
 use memmap2::MmapMut;
+use std::ffi::{OsStr, OsString};
 use std::fs::OpenOptions;
 use std::ops::Add;
 use std::os::unix::fs::OpenOptionsExt;
@@ -98,7 +99,7 @@ impl Default for State {
 /// synchronization purposes with a help of atomics
 pub(crate) struct StateContainer {
     /// State file path
-    state_path: String,
+    state_path: OsString,
     /// Modifiable memory mapped file storing state
     mmap: Option<MmapMut>,
 }
@@ -107,8 +108,9 @@ const STATE_SUFFIX: &str = "_state";
 
 impl StateContainer {
     /// Create new instance of `StateContainer`
-    pub(crate) fn new(path: &str) -> Self {
-        let state_path = path.to_owned() + STATE_SUFFIX;
+    pub(crate) fn new(path_prefix: &OsStr) -> Self {
+        let mut state_path = path_prefix.to_os_string();
+        state_path.push(STATE_SUFFIX);
         StateContainer {
             state_path,
             mmap: None,

@@ -1,3 +1,5 @@
+use std::ffi::{OsStr, OsString};
+
 use crate::synchronizer::SynchronizerError;
 use crate::synchronizer::SynchronizerError::*;
 
@@ -52,8 +54,10 @@ impl InstanceVersion {
 
     /// Get data instance `path`
     #[inline]
-    pub(crate) fn path(&self, base_path: &str) -> String {
-        format!("{}_data_{}", base_path, self.idx())
+    pub(crate) fn path(&self, path_prefix: &OsStr) -> OsString {
+        let mut path = path_prefix.to_os_string();
+        path.push(format!("_data_{}", self.idx()));
+        path
     }
 }
 

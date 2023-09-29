@@ -1,4 +1,5 @@
 use memmap2::{Mmap, MmapMut};
+use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
 
@@ -10,7 +11,7 @@ use crate::synchronizer::SynchronizerError::*;
 /// to switch between them when data instance version is changed
 pub(crate) struct DataContainer {
     /// Base data path
-    base_path: String,
+    path_prefix: OsString,
     /// Reader's current local instance version
     version: Option<InstanceVersion>,
     /// Read-only memory mapped files storing data
@@ -19,9 +20,9 @@ pub(crate) struct DataContainer {
 
 impl DataContainer {
     /// Create new instance of `DataContainer`
-    pub(crate) fn new(base_path: String) -> Self {
+    pub(crate) fn new(path_prefix: &OsStr) -> Self {
         DataContainer {
-            base_path,
+            path_prefix: path_prefix.into(),
             version: None,
             idx_mmaps: [None, None],
         }
@@ -38,7 +39,7 @@ impl DataContainer {
             .write(true)
             .create(true)
             .mode(0o640) // set file mode to allow read/write from owner, read from group only
-            .open(version.path(&self.base_path))
+            .open(version.path(&self.path_prefix))
             .map_err(FailedDataWrite)?;
 
         // grow data file when its current length exceeded
@@ -68,7 +69,7 @@ impl DataContainer {
         // * if it never was opened/mapped before
         // * if current mmap size is smaller than requested data size
         if mmap.is_none() || mmap.as_ref().unwrap().len() < data_size {
-            let data_file = File::open(version.path(&self.base_path)).map_err(FailedDataRead)?;
+            let data_file = File::open(version.path(&self.path_prefix)).map_err(FailedDataRead)?;
             if data_file.metadata().map_err(FailedDataRead)?.len() < data_size as u64 {
                 return Err(FailedEntityRead);
             }
