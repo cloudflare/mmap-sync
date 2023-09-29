@@ -1,6 +1,8 @@
 use memmap2::{Mmap, MmapMut};
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
+
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
 use crate::instance::InstanceVersion;
@@ -34,11 +36,14 @@ impl DataContainer {
         data: &[u8],
         version: InstanceVersion,
     ) -> Result<usize, SynchronizerError> {
-        let data_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .mode(0o640) // set file mode to allow read/write from owner, read from group only
+        let mut opts = OpenOptions::new();
+        opts.read(true).write(true).create(true);
+
+        // Only add mode on Unix-based systems
+        #[cfg(unix)]
+        opts.mode(0o640);
+
+        let data_file = opts
             .open(version.path(&self.path_prefix))
             .map_err(FailedDataWrite)?;
 

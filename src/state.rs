@@ -2,10 +2,12 @@ use memmap2::MmapMut;
 use std::ffi::{OsStr, OsString};
 use std::fs::OpenOptions;
 use std::ops::Add;
-use std::os::unix::fs::OpenOptionsExt;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use std::{mem, thread};
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 use crate::instance::InstanceVersion;
 use crate::synchronizer::SynchronizerError;
@@ -121,13 +123,14 @@ impl StateContainer {
     #[inline]
     pub(crate) fn state(&mut self, create: bool) -> Result<&mut State, SynchronizerError> {
         if self.mmap.is_none() {
-            let state_file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(create)
-                .mode(0o660) // set file mode to allow read/write from owner/group only
-                .open(&self.state_path)
-                .map_err(FailedStateRead)?;
+            let mut opts = OpenOptions::new();
+            opts.read(true).write(true).create(create);
+
+            // Only add mode on Unix-based systems to allow read/write from owner/group only
+            #[cfg(unix)]
+            opts.mode(0o660);
+
+            let state_file = opts.open(&self.state_path).map_err(FailedStateRead)?;
 
             let mut need_init = false;
             // Reset state file size to match exactly `STATE_SIZE`
