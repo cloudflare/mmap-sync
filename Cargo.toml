@@ -14,8 +14,8 @@ categories = ["os", "filesystem", "concurrency", "data-structures", "memory-mana
 bytecheck = { version = "~0.6.8", default-features = false }
 memmap2 = "0.7.0"
 rkyv = { version = "0.7.40", features = ["validation", "strict"] }
-seahash = "4.1.0"
 thiserror = "1.0.30"
+wyhash = "0.5.0"
 
 [dev-dependencies]
 proptest = "1.0.0"

@@ -3,17 +3,17 @@
 //! The `Synchronizer` offers a simple interface for reading and writing data from/to shared memory. It uses memory-mapped files and wait-free synchronization to provide high concurrency wait-free reads over a single writer instance. This design is inspired by the [Left-Right concurrency control technique](https://github.com/pramalhe/ConcurrencyFreaks/blob/master/papers/left-right-2014.pdf), allowing for efficient and flexible inter-process communication.
 //!
 //! Furthermore, with the aid of the [rkyv](https://rkyv.org/) library, `Synchronizer` can perform zero-copy deserialization, reducing time and memory usage when accessing data.
+use std::ffi::OsStr;
+use std::hash::{BuildHasher, BuildHasherDefault, Hasher};
+use std::time::Duration;
 
 use bytecheck::CheckBytes;
 use rkyv::ser::serializers::AllocSerializer;
 use rkyv::ser::Serializer;
 use rkyv::validation::validators::DefaultValidator;
 use rkyv::{archived_root, check_archived_root, Archive, Serialize};
-use seahash::SeaHasher;
-use std::ffi::OsStr;
-use std::hash::Hasher;
-use std::time::Duration;
 use thiserror::Error;
+use wyhash::WyHash;
 
 use crate::data::DataContainer;
 use crate::guard::{ReadGuard, ReadResult};
@@ -24,11 +24,13 @@ use crate::synchronizer::SynchronizerError::*;
 /// `Synchronizer` is a concurrency primitive that manages data access between a single writer process and multiple reader processes.
 ///
 /// It coordinates the access to two data files that store the shared data. A state file, also memory-mapped, stores the index of the current data file and the number of active readers for each index, updated via atomic instructions.
-pub struct Synchronizer {
+pub struct Synchronizer<H: Hasher + Default = WyHash> {
     /// Container storing state mmap
     state_container: StateContainer,
     /// Container storing data mmap
     data_container: DataContainer,
+    /// Hasher used for checksum calculation
+    build_hasher: BuildHasherDefault<H>,
 }
 
 /// `SynchronizerError` enumerates all possible errors returned by this library.
@@ -68,6 +70,7 @@ impl Synchronizer {
         Synchronizer {
             state_container: StateContainer::new(path_prefix),
             data_container: DataContainer::new(path_prefix),
+            build_hasher: BuildHasherDefault::default(),
         }
     }
 
@@ -111,7 +114,7 @@ impl Synchronizer {
         let state = self.state_container.state(true)?;
 
         // calculate data checksum
-        let mut hasher = SeaHasher::new();
+        let mut hasher = self.build_hasher.build_hasher();
         hasher.write(&data);
         let checksum = hasher.finish();
 
@@ -142,7 +145,7 @@ impl Synchronizer {
         let state = self.state_container.state(true)?;
 
         // calculate data checksum
-        let mut hasher = SeaHasher::new();
+        let mut hasher = self.build_hasher.build_hasher();
         hasher.write(data);
         let checksum = hasher.finish();
 
@@ -296,7 +299,7 @@ mod tests {
         assert!(!Path::new(&data_path_1).exists());
         assert_eq!(
             reader.version().unwrap(),
-            InstanceVersion(15768700985330904896)
+            InstanceVersion(8817430144856633152)
         );
 
         // check that first time scoped `read` works correctly and switches the data
@@ -315,7 +318,7 @@ mod tests {
         assert!(Path::new(&data_path_1).exists());
         assert_eq!(
             reader.version().unwrap(),
-            InstanceVersion(7331894278219651425)
+            InstanceVersion(1441050725688826209)
         );
 
         // check that another scoped `read` works correctly and switches the data
@@ -328,7 +331,7 @@ mod tests {
         assert_eq!(reset, false);
         assert_eq!(
             reader.version().unwrap(),
-            InstanceVersion(9949249822303202528)
+            InstanceVersion(14058099486534675680)
         );
 
         let entity = entity_generator.gen(200);
@@ -337,7 +340,7 @@ mod tests {
         assert_eq!(reset, false);
         assert_eq!(
             reader.version().unwrap(),
-            InstanceVersion(16072265150643592177)
+            InstanceVersion(18228729609619266545)
         );
 
         fetch_and_assert_entity(&mut reader, &entity, true);
