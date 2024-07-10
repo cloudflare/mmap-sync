@@ -3,17 +3,17 @@
 //! The `Synchronizer` offers a simple interface for reading and writing data from/to shared memory. It uses memory-mapped files and wait-free synchronization to provide high concurrency wait-free reads over a single writer instance. This design is inspired by the [Left-Right concurrency control technique](https://github.com/pramalhe/ConcurrencyFreaks/blob/master/papers/left-right-2014.pdf), allowing for efficient and flexible inter-process communication.
 //!
 //! Furthermore, with the aid of the [rkyv](https://rkyv.org/) library, `Synchronizer` can perform zero-copy deserialization, reducing time and memory usage when accessing data.
+use std::ffi::OsStr;
+use std::hash::{BuildHasher, BuildHasherDefault, Hasher};
+use std::time::Duration;
 
 use bytecheck::CheckBytes;
-use rkyv::ser::serializers::AllocSerializer;
+use rkyv::ser::serializers::{AlignedSerializer, AllocSerializer};
 use rkyv::ser::Serializer;
 use rkyv::validation::validators::DefaultValidator;
-use rkyv::{archived_root, check_archived_root, Archive, Serialize};
-use seahash::SeaHasher;
-use std::ffi::OsStr;
-use std::hash::Hasher;
-use std::time::Duration;
+use rkyv::{archived_root, check_archived_root, AlignedVec, Archive, Serialize};
 use thiserror::Error;
+use wyhash::WyHash;
 
 use crate::data::DataContainer;
 use crate::guard::{ReadGuard, ReadResult};
@@ -24,11 +24,15 @@ use crate::synchronizer::SynchronizerError::*;
 /// `Synchronizer` is a concurrency primitive that manages data access between a single writer process and multiple reader processes.
 ///
 /// It coordinates the access to two data files that store the shared data. A state file, also memory-mapped, stores the index of the current data file and the number of active readers for each index, updated via atomic instructions.
-pub struct Synchronizer {
+pub struct Synchronizer<H: Hasher + Default = WyHash, const N: usize = 1024> {
     /// Container storing state mmap
     state_container: StateContainer,
     /// Container storing data mmap
     data_container: DataContainer,
+    /// Hasher used for checksum calculation
+    build_hasher: BuildHasherDefault<H>,
+    /// Re-usable buffer for serialization
+    serialize_buffer: Option<AlignedVec>,
 }
 
 /// `SynchronizerError` enumerates all possible errors returned by this library.
@@ -59,15 +63,21 @@ pub enum SynchronizerError {
     InvalidInstanceVersionParams,
 }
 
-/// Default serializer with 1 MB scratch space allocated on the heap.
-type DefaultSerializer = AllocSerializer<1_000_000>;
-
 impl Synchronizer {
-    /// Create new instance of `Synchronizer` using given `path_prefix`
-    pub fn new(path_prefix: &OsStr) -> Synchronizer {
+    /// Create new instance of `Synchronizer` using given `path_prefix` and default template parameters
+    pub fn new(path_prefix: &OsStr) -> Self {
+        Self::with_params(path_prefix)
+    }
+}
+
+impl<H: Hasher + Default, const N: usize> Synchronizer<H, N> {
+    /// Create new instance of `Synchronizer` using given `path_prefix` and template parameters
+    pub fn with_params(path_prefix: &OsStr) -> Self {
         Synchronizer {
             state_container: StateContainer::new(path_prefix),
             data_container: DataContainer::new(path_prefix),
+            build_hasher: BuildHasherDefault::default(),
+            serialize_buffer: Some(AlignedVec::new()),
         }
     }
 
@@ -94,11 +104,18 @@ impl Synchronizer {
         grace_duration: Duration,
     ) -> Result<(usize, bool), SynchronizerError>
     where
-        T: Serialize<DefaultSerializer>,
+        T: Serialize<AllocSerializer<N>>,
         T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
     {
+        let mut buf = self.serialize_buffer.take().ok_or(FailedEntityWrite)?;
+        buf.clear();
+
         // serialize given entity into bytes
-        let mut serializer = DefaultSerializer::default();
+        let mut serializer = AllocSerializer::new(
+            AlignedSerializer::new(buf),
+            Default::default(),
+            Default::default(),
+        );
         let _ = serializer
             .serialize_value(entity)
             .map_err(|_| FailedEntityWrite)?;
@@ -111,7 +128,7 @@ impl Synchronizer {
         let state = self.state_container.state(true)?;
 
         // calculate data checksum
-        let mut hasher = SeaHasher::new();
+        let mut hasher = self.build_hasher.build_hasher();
         hasher.write(&data);
         let checksum = hasher.finish();
 
@@ -122,6 +139,9 @@ impl Synchronizer {
 
         // switch readers to new version
         state.switch_version(new_version);
+
+        // Restore buffer for potential reuse
+        self.serialize_buffer.replace(data);
 
         Ok((size, reset))
     }
@@ -135,14 +155,14 @@ impl Synchronizer {
         grace_duration: Duration,
     ) -> Result<(usize, bool), SynchronizerError>
     where
-        T: Serialize<DefaultSerializer>,
+        T: Serialize<AllocSerializer<N>>,
         T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
     {
         // fetch current state from mapped memory
         let state = self.state_container.state(true)?;
 
         // calculate data checksum
-        let mut hasher = SeaHasher::new();
+        let mut hasher = self.build_hasher.build_hasher();
         hasher.write(data);
         let checksum = hasher.finish();
 
@@ -296,7 +316,7 @@ mod tests {
         assert!(!Path::new(&data_path_1).exists());
         assert_eq!(
             reader.version().unwrap(),
-            InstanceVersion(15768700985330904896)
+            InstanceVersion(8817430144856633152)
         );
 
         // check that first time scoped `read` works correctly and switches the data
@@ -315,7 +335,7 @@ mod tests {
         assert!(Path::new(&data_path_1).exists());
         assert_eq!(
             reader.version().unwrap(),
-            InstanceVersion(7331894278219651425)
+            InstanceVersion(1441050725688826209)
         );
 
         // check that another scoped `read` works correctly and switches the data
@@ -328,7 +348,7 @@ mod tests {
         assert_eq!(reset, false);
         assert_eq!(
             reader.version().unwrap(),
-            InstanceVersion(9949249822303202528)
+            InstanceVersion(14058099486534675680)
         );
 
         let entity = entity_generator.gen(200);
@@ -337,7 +357,7 @@ mod tests {
         assert_eq!(reset, false);
         assert_eq!(
             reader.version().unwrap(),
-            InstanceVersion(16072265150643592177)
+            InstanceVersion(18228729609619266545)
         );
 
         fetch_and_assert_entity(&mut reader, &entity, true);

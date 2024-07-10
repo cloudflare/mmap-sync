@@ -17,7 +17,9 @@ pub(crate) struct DataContainer {
     /// Reader's current local instance version
     version: Option<InstanceVersion>,
     /// Read-only memory mapped files storing data
-    idx_mmaps: [Option<Mmap>; 2],
+    read_mmaps: [Option<Mmap>; 2],
+    /// Write-only memory mapped files storing data
+    write_mmaps: [Option<MmapMut>; 2],
 }
 
 impl DataContainer {
@@ -26,7 +28,8 @@ impl DataContainer {
         DataContainer {
             path_prefix: path_prefix.into(),
             version: None,
-            idx_mmaps: [None, None],
+            read_mmaps: [None, None],
+            write_mmaps: [None, None],
         }
     }
 
@@ -36,27 +39,38 @@ impl DataContainer {
         data: &[u8],
         version: InstanceVersion,
     ) -> Result<usize, SynchronizerError> {
-        let mut opts = OpenOptions::new();
-        opts.read(true).write(true).create(true);
+        let mmap = &mut self.write_mmaps[version.idx()];
+        let data_size = version.size();
 
-        // Only add mode on Unix-based systems
-        #[cfg(unix)]
-        opts.mode(0o640);
+        // only open and mmap data file in the following cases:
+        // * if it never was opened/mapped before
+        // * if current mmap size is smaller than requested data size
+        if mmap.is_none() || mmap.as_ref().unwrap().len() < data_size {
+            let mut opts = OpenOptions::new();
+            opts.read(true).write(true).create(true);
 
-        let data_file = opts
-            .open(version.path(&self.path_prefix))
-            .map_err(FailedDataWrite)?;
+            // Only add mode on Unix-based systems
+            #[cfg(unix)]
+            opts.mode(0o640);
 
-        // grow data file when its current length exceeded
-        let data_len = data.len() as u64;
-        if data_len > data_file.metadata().map_err(FailedDataWrite)?.len() {
-            data_file.set_len(data_len).map_err(FailedDataWrite)?;
+            let data_file = opts
+                .open(version.path(&self.path_prefix))
+                .map_err(FailedDataWrite)?;
+
+            // grow data file when its current length exceeded
+            let data_len = data.len() as u64;
+            if data_len > data_file.metadata().map_err(FailedDataWrite)?.len() {
+                data_file.set_len(data_len).map_err(FailedDataWrite)?;
+            }
+
+            *mmap = Some(unsafe { MmapMut::map_mut(&data_file).map_err(FailedDataWrite)? });
         }
 
-        // copy data to mapped file and ensure it's been flushed
-        let mut mmap = unsafe { MmapMut::map_mut(&data_file).map_err(FailedDataWrite)? };
-        mmap[..data.len()].copy_from_slice(data);
-        mmap.flush().map_err(FailedDataWrite)?;
+        if let Some(mmap) = mmap {
+            // copy data to mapped file and ensure it's been flushed
+            mmap[..data.len()].copy_from_slice(data);
+            mmap.flush().map_err(FailedDataWrite)?;
+        }
 
         Ok(data.len())
     }
@@ -67,7 +81,7 @@ impl DataContainer {
         &mut self,
         version: InstanceVersion,
     ) -> Result<(&[u8], bool), SynchronizerError> {
-        let mmap = &mut self.idx_mmaps[version.idx()];
+        let mmap = &mut self.read_mmaps[version.idx()];
         let data_size = version.size();
 
         // only open and mmap data file in the following cases:
