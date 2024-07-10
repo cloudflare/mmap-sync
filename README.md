@@ -50,7 +50,7 @@ The templated type `T` for `Synchronizer` can be any Rust struct implementing sp
 To use `mmap-sync`, add it to your `Cargo.toml` under `[dependencies]`:
 ```toml
 [dependencies]
-mmap-sync = "1.0.0"
+mmap-sync = "1"
 ```
 Then, import `mmap-sync` in your Rust program:
 ```rust
@@ -86,3 +86,44 @@ $ stat -c '%A %s %n' /tmp/hello_world_*
 ```
 
 With these steps, you can start utilizing `mmap-sync` in your Rust applications for efficient concurrent data access across processes.
+
+## Tuning performance
+Using `tmpfs` volume will reduce the disk I/O latency since it operates directly on RAM, offering faster read and write capabilities compared to conventional disk-based storage:
+```rust
+let mut synchronizer = Synchronizer::new("/dev/shm/hello_world".as_ref());
+```
+This change points the synchronizer to use a shared memory object located in a `tmpfs` filesystem, which is typically mounted at `/dev/shm` on most Linux systems. This should help alleviate some of the bottlenecks associated with disk I/O.
+If `/dev/shm` does not provide enough space or if you want to create a dedicated `tmpfs` instance, you can set up your own with the desired size. For example, to create a 1GB `tmpfs` volume, you can use the following command:
+```shell
+sudo mount -t tmpfs -o size=1G tmpfs /mnt/mytmpfs
+```
+
+## Benchmarks
+To run benchmarks you first need to install `cargo-criterion` binary:
+```shell
+cargo install cargo-criterion
+```
+
+Then you'll be able to run benchmarks with the following command:
+```shell
+cargo criterion --bench synchronizer
+```
+
+Benchmarks presented below are executed on Linux laptop with `13th Gen Intel(R) Core(TM) i7-13800H` processor and compiler flags set to `RUSTFLAGS=-C target-cpu=native`.
+```shell
+synchronizer/write
+    time:   [250.71 ns 251.42 ns 252.41 ns]
+    thrpt:  [3.9619 Melem/s 3.9774 Melem/s 3.9887 Melem/s]
+
+synchronizer/write_raw
+    time:   [145.25 ns 145.53 ns 145.92 ns]
+    thrpt:  [6.8531 Melem/s 6.8717 Melem/s 6.8849 Melem/s]
+
+synchronizer/read/check_bytes_true
+    time:   [40.114 ns 40.139 ns 40.186 ns]
+    thrpt:  [24.884 Melem/s 24.914 Melem/s 24.929 Melem/s]
+
+synchronizer/read/check_bytes_false
+    time:   [26.658 ns 26.673 ns 26.696 ns]
+    thrpt:  [37.458 Melem/s 37.491 Melem/s 37.512 Melem/s]
+```

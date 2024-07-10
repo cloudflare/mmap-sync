@@ -1,6 +1,6 @@
 [package]
 name = "mmap-sync"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 authors = ["Alex Bocharov <bocharov.alexandr@gmail.com>"]
 description = "A Rust package allowing sharing of data between processes in a wait-free and zero-copy fashion from mapped memory."
@@ -12,14 +12,14 @@ categories = ["os", "filesystem", "concurrency", "data-structures", "memory-mana
 
 [dependencies]
 bytecheck = { version = "~0.6.8", default-features = false }
-memmap2 = "0.7.0"
+memmap2 = "0.9.4"
 rkyv = { version = "0.7.40", features = ["validation", "strict"] }
 thiserror = "1.0.30"
 wyhash = "0.5.0"
 
 [dev-dependencies]
-criterion = { version = "0.3.5", features = ["html_reports"] }
-pprof = { version = "0.6.2", features = ["flamegraph", "protobuf", "criterion"] }
+criterion = { version = "0.5.1", features = ["html_reports"] }
+pprof = { version = "0.13.0", features = ["flamegraph", "protobuf-codec", "criterion"] }
 proptest = "1.0.0"
 rand = "0.8.5"
 
