@@ -14,11 +14,10 @@ use crate::synchronizer::SynchronizerError;
 use crate::synchronizer::SynchronizerError::*;
 
 const STATE_SIZE: usize = mem::size_of::<State>();
-const SLEEP_DURATION: Duration = Duration::from_secs(1);
 
 /// State stored in memory for synchronization using atomics
 #[repr(C)]
-pub(crate) struct State {
+pub(crate) struct State<const SD: usize = 1_000_000_000> {
     /// Current data instance version
     version: AtomicU64,
     /// Current number of readers for each data instance
@@ -48,7 +47,11 @@ impl State {
 
     /// Acquire next `idx` of the state for writing
     #[inline]
-    pub(crate) fn acquire_next_idx(&self, grace_duration: Duration) -> (usize, bool) {
+    pub(crate) fn acquire_next_idx(
+        &self,
+        grace_duration: Duration,
+        sleep_duration: Duration,
+    ) -> (usize, bool) {
         // calculate `next_idx` to acquire, in case of uninitialized version use 0
         let next_idx = match InstanceVersion::try_from(self.version.load(Ordering::SeqCst)) {
             Ok(version) => (version.idx() + 1) % 2,
@@ -69,7 +72,7 @@ impl State {
                 reset = true;
                 break;
             } else {
-                thread::sleep(SLEEP_DURATION);
+                thread::sleep(sleep_duration);
             }
         }
 
