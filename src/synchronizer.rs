@@ -24,7 +24,16 @@ use crate::synchronizer::SynchronizerError::*;
 /// `Synchronizer` is a concurrency primitive that manages data access between a single writer process and multiple reader processes.
 ///
 /// It coordinates the access to two data files that store the shared data. A state file, also memory-mapped, stores the index of the current data file and the number of active readers for each index, updated via atomic instructions.
-pub struct Synchronizer<H: Hasher + Default = WyHash, const N: usize = 1024> {
+///
+/// Template parameters:
+///   - `H` - hasher used for checksum calculation
+///   - `N` - serializer scratch space size
+///   - `SD` - sleep duration in nanoseconds used by writer during lock acquisition (default 1s)
+pub struct Synchronizer<
+    H: Hasher + Default = WyHash,
+    const N: usize = 1024,
+    const SD: u64 = 1_000_000_000,
+> {
     /// Container storing state mmap
     state_container: StateContainer,
     /// Container storing data mmap
@@ -70,7 +79,7 @@ impl Synchronizer {
     }
 }
 
-impl<H: Hasher + Default, const N: usize> Synchronizer<H, N> {
+impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> {
     /// Create new instance of `Synchronizer` using given `path_prefix` and template parameters
     pub fn with_params(path_prefix: &OsStr) -> Self {
         Synchronizer {
@@ -133,7 +142,8 @@ impl<H: Hasher + Default, const N: usize> Synchronizer<H, N> {
         let checksum = hasher.finish();
 
         // acquire next available data file idx and write data to it
-        let (new_idx, reset) = state.acquire_next_idx(grace_duration);
+        let acquire_sleep_duration = Duration::from_nanos(SD);
+        let (new_idx, reset) = state.acquire_next_idx(grace_duration, acquire_sleep_duration);
         let new_version = InstanceVersion::new(new_idx, data.len(), checksum)?;
         let size = self.data_container.write(&data, new_version)?;
 
@@ -167,7 +177,8 @@ impl<H: Hasher + Default, const N: usize> Synchronizer<H, N> {
         let checksum = hasher.finish();
 
         // acquire next available data file idx and write data to it
-        let (new_idx, reset) = state.acquire_next_idx(grace_duration);
+        let acquire_sleep_duration = Duration::from_nanos(SD);
+        let (new_idx, reset) = state.acquire_next_idx(grace_duration, acquire_sleep_duration);
         let new_version = InstanceVersion::new(new_idx, data.len(), checksum)?;
         let size = self.data_container.write(data, new_version)?;
 
