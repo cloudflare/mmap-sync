@@ -10,12 +10,16 @@ repository = "https://github.com/cloudflare/mmap-sync"
 keywords = ["memory-mapping", "synchronization", "interprocess", "wait-free", "zero-copy"]
 categories = ["os", "filesystem", "concurrency", "data-structures", "memory-management"]
 
+[features]
+write-lock = ["libc"]
+
 [dependencies]
 bytecheck = { version = "~0.6.8", default-features = false }
 memmap2 = "0.9.4"
 rkyv = { version = "0.7.40", features = ["validation", "strict"] }
 thiserror = "1.0.30"
 wyhash = "0.5.0"
+libc = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["html_reports"] }
@@ -26,3 +30,6 @@ rand = "0.8.5"
 [[bench]]
 name = "synchronizer"
 harness = false
+
+[package.metadata.docs.rs]
+all-features = true

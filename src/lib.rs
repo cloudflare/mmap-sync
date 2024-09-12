@@ -1,3 +1,4 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
 //! `mmap-sync` is a high-performance, concurrent data access library for Rust. It is designed to handle data access between a single writer process and multiple reader processes efficiently using memory-mapped files, wait-free synchronization, and zero-copy deserialization.
 //!
 //! ## Features
