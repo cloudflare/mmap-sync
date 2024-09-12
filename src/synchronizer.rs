@@ -18,6 +18,7 @@ use wyhash::WyHash;
 use crate::data::DataContainer;
 use crate::guard::{ReadGuard, ReadResult};
 use crate::instance::InstanceVersion;
+use crate::locks::{LockDisabled, WriteLockStrategy};
 use crate::state::StateContainer;
 use crate::synchronizer::SynchronizerError::*;
 
@@ -27,15 +28,17 @@ use crate::synchronizer::SynchronizerError::*;
 ///
 /// Template parameters:
 ///   - `H` - hasher used for checksum calculation
+///   - `WL` - optional write locking to prevent multiple writers. (default [`LockDisabled`])
 ///   - `N` - serializer scratch space size
 ///   - `SD` - sleep duration in nanoseconds used by writer during lock acquisition (default 1s)
 pub struct Synchronizer<
     H: Hasher + Default = WyHash,
+    WL = LockDisabled,
     const N: usize = 1024,
     const SD: u64 = 1_000_000_000,
 > {
     /// Container storing state mmap
-    state_container: StateContainer,
+    state_container: StateContainer<WL>,
     /// Container storing data mmap
     data_container: DataContainer,
     /// Hasher used for checksum calculation
@@ -70,6 +73,9 @@ pub enum SynchronizerError {
     /// The instance version parameters were invalid.
     #[error("invalid instance version params")]
     InvalidInstanceVersionParams,
+    /// Write locking is enabled and the lock is held by another writer.
+    #[error("write blocked by conflicting lock")]
+    WriteLockConflict,
 }
 
 impl Synchronizer {
@@ -79,7 +85,11 @@ impl Synchronizer {
     }
 }
 
-impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> {
+impl<'a, H, WL, const N: usize, const SD: u64> Synchronizer<H, WL, N, SD>
+where
+    H: Hasher + Default,
+    WL: WriteLockStrategy<'a>,
+{
     /// Create new instance of `Synchronizer` using given `path_prefix` and template parameters
     pub fn with_params(path_prefix: &OsStr) -> Self {
         Synchronizer {
@@ -108,7 +118,7 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
     /// A result containing a tuple of the number of bytes written and a boolean indicating whether
     /// the reader count was reset, or a `SynchronizerError` if the operation fails.
     pub fn write<T>(
-        &mut self,
+        &'a mut self,
         entity: &T,
         grace_duration: Duration,
     ) -> Result<(usize, bool), SynchronizerError>
@@ -134,7 +144,7 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
         check_archived_root::<T>(&data).map_err(|_| FailedEntityRead)?;
 
         // fetch current state from mapped memory
-        let state = self.state_container.state(true)?;
+        let state = self.state_container.state::<true>(true)?;
 
         // calculate data checksum
         let mut hasher = self.build_hasher.build_hasher();
@@ -160,7 +170,7 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
     /// Returns number of bytes written to data file and a boolean flag, for diagnostic purposes,
     /// indicating that we have reset our readers counter after a reader died without decrementing it.
     pub fn write_raw<T>(
-        &mut self,
+        &'a mut self,
         data: &[u8],
         grace_duration: Duration,
     ) -> Result<(usize, bool), SynchronizerError>
@@ -169,7 +179,7 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
         T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
     {
         // fetch current state from mapped memory
-        let state = self.state_container.state(true)?;
+        let state = self.state_container.state::<true>(true)?;
 
         // calculate data checksum
         let mut hasher = self.build_hasher.build_hasher();
@@ -206,13 +216,16 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
     /// `rkyv::archived_root` function, which has its own safety considerations. Particularly, it
     /// assumes the byte slice provided to it accurately represents an archived object, and that the
     /// root of the object is stored at the end of the slice.
-    pub unsafe fn read<T>(&mut self, check_bytes: bool) -> Result<ReadResult<T>, SynchronizerError>
+    pub unsafe fn read<T>(
+        &'a mut self,
+        check_bytes: bool,
+    ) -> Result<ReadResult<T>, SynchronizerError>
     where
         T: Archive,
         T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
     {
         // fetch current state from mapped memory
-        let state = self.state_container.state(false)?;
+        let state = self.state_container.state::<false>(false)?;
 
         // fetch current version
         let version = state.version()?;
@@ -234,9 +247,9 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
 
     /// Returns current `InstanceVersion` stored within the state, useful for detecting
     /// whether synchronized `entity` has changed.
-    pub fn version(&mut self) -> Result<InstanceVersion, SynchronizerError> {
+    pub fn version(&'a mut self) -> Result<InstanceVersion, SynchronizerError> {
         // fetch current state from mapped memory
-        let state = self.state_container.state(false)?;
+        let state = self.state_container.state::<false>(false)?;
 
         // fetch current version
         state.version()
@@ -246,7 +259,8 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
 #[cfg(test)]
 mod tests {
     use crate::instance::InstanceVersion;
-    use crate::synchronizer::Synchronizer;
+    use crate::locks::SingleWriter;
+    use crate::synchronizer::{Synchronizer, SynchronizerError};
     use bytecheck::CheckBytes;
     use rand::distributions::Uniform;
     use rand::prelude::*;
@@ -255,6 +269,7 @@ mod tests {
     use std::fs;
     use std::path::Path;
     use std::time::Duration;
+    use wyhash::WyHash;
 
     #[derive(Archive, Deserialize, Serialize, Debug, PartialEq)]
     #[archive_attr(derive(CheckBytes))]
@@ -383,5 +398,21 @@ mod tests {
         assert_eq!(actual_entity.map, expected_entity.map);
         assert_eq!(actual_entity.version, expected_entity.version);
         assert_eq!(actual_entity.is_switched(), expected_is_switched);
+    }
+
+    #[test]
+    fn single_writer_lock_prevents_multiple_writers() {
+        static PATH: &str = "/tmp/synchronizer_single_writer";
+        let mut entity_generator = MockEntityGenerator::new(3);
+        let entity = entity_generator.gen(100);
+
+        let mut writer1 = Synchronizer::<WyHash, SingleWriter>::with_params(PATH.as_ref());
+        let mut writer2 = Synchronizer::<WyHash, SingleWriter>::with_params(PATH.as_ref());
+
+        writer1.write(&entity, Duration::from_secs(1)).unwrap();
+        assert!(matches!(
+            writer2.write(&entity, Duration::from_secs(1)),
+            Err(SynchronizerError::WriteLockConflict)
+        ));
     }
 }
