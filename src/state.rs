@@ -1,19 +1,18 @@
 use memmap2::MmapMut;
 use std::ffi::{OsStr, OsString};
-use std::fs::{File, OpenOptions};
-use std::ops::Add;
+use std::fs::OpenOptions;
+use std::ops::{Add, DerefMut};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use std::{mem, thread};
 
-#[cfg(all(unix, feature = "write-lock"))]
-use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
 use crate::instance::InstanceVersion;
+use crate::locks::WriteLockStrategy;
+use crate::synchronizer::SynchronizerError;
 use crate::synchronizer::SynchronizerError::*;
-use crate::synchronizer::{SynchronizerError, WriteLockMode};
 
 const STATE_SIZE: usize = mem::size_of::<State>();
 
@@ -104,22 +103,19 @@ impl Default for State {
 
 /// State container stores memory mapped state file, which is used for
 /// synchronization purposes with a help of atomics
-pub(crate) struct StateContainer {
+pub(crate) struct StateContainer<WL> {
     /// State file path
     state_path: OsString,
     /// Modifiable memory mapped file storing state.
     ///
-    /// We also hold the file backing the mmaped memory; this keeps the file descriptor open and
-    /// preserves locks created with flock. Locks are released when dropped.
-    mmap: Option<(MmapMut, File)>,
-    /// Indicates if we have an exclusive write lock
-    #[cfg(all(unix, feature = "write-lock"))]
-    write_lock_held: bool,
+    /// The [`MmapMut`] type is wrapped in a [`WriteLockStrategy`] to require lock acquisition
+    /// prior to writing.
+    mmap: Option<WL>,
 }
 
 const STATE_SUFFIX: &str = "_state";
 
-impl StateContainer {
+impl<'a, WL: WriteLockStrategy<'a>> StateContainer<WL> {
     /// Create new instance of `StateContainer`
     pub(crate) fn new(path_prefix: &OsStr) -> Self {
         let mut state_path = path_prefix.to_os_string();
@@ -127,18 +123,22 @@ impl StateContainer {
         StateContainer {
             state_path,
             mmap: None,
-            #[cfg(all(unix, feature = "write-lock"))]
-            write_lock_held: false,
         }
     }
 
     /// Fetch state from existing memory mapped file or create new one.
     #[inline]
-    pub(crate) fn state_read(&mut self, create: bool) -> Result<&mut State, SynchronizerError> {
+    pub(crate) fn state_read(
+        &'a mut self,
+        create: bool,
+    ) -> Result<&'a mut State, SynchronizerError> {
         if self.mmap.is_none() {
             self.prepare_mmap(create)?;
         }
-        Ok(unsafe { &mut *(self.mmap.as_ref().unwrap().0.as_ptr() as *mut State) })
+
+        let mmap = self.mmap.as_ref().unwrap().read();
+
+        Ok(unsafe { &mut *(mmap.as_ptr() as *mut State) })
     }
 
     /// Fetch state from existing memory mapped file or create new one.
@@ -147,33 +147,15 @@ impl StateContainer {
     /// lock conflict error if the lock cannot be acquired.
     #[inline]
     pub(crate) fn state_write(
-        &mut self,
+        &'a mut self,
         create: bool,
-        #[allow(unused_variables)] write_lock: WriteLockMode,
-    ) -> Result<&mut State, SynchronizerError> {
+    ) -> Result<&'a mut State, SynchronizerError> {
         if self.mmap.is_none() {
             self.prepare_mmap(create)?;
         }
 
-        #[allow(unused_variables)]
-        let (mmap, file) = self.mmap.as_mut().unwrap();
-
-        // Acquire an exclusive write lock if `write_lock` requires it.
-        #[cfg(all(unix, feature = "write-lock"))]
-        if !self.write_lock_held {
-            match write_lock {
-                WriteLockMode::Disabled => {}
-                WriteLockMode::SingleWriter => {
-                    match unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } {
-                        0 => self.write_lock_held = true,
-                        _ => {
-                            dbg!(std::io::Error::last_os_error());
-                            return Err(SynchronizerError::WriteLockConflict);
-                        }
-                    }
-                }
-            }
-        }
+        let mut guard = self.mmap.as_mut().unwrap().lock()?;
+        let mmap = guard.deref_mut();
 
         Ok(unsafe { &mut *(mmap.as_ptr() as *mut State) })
     }
@@ -209,27 +191,26 @@ impl StateContainer {
             };
         };
 
-        self.mmap = Some((mmap, state_file));
+        self.mmap = Some(WL::new(mmap, state_file));
         Ok(())
     }
 }
 
-#[cfg(all(test, unix, feature = "write-lock"))]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::synchronizer::{SynchronizerError, WriteLockMode};
+    use crate::locks::SingleWriter;
+    use crate::synchronizer::SynchronizerError;
 
     #[test]
     fn single_writer_lock_mode_prevents_duplicate_writer() {
         static PATH: &str = "/tmp/single_writer_lock_test";
-        let mut state1 = StateContainer::new(PATH.as_ref());
-        let mut state2 = StateContainer::new(PATH.as_ref());
+        let mut state1 = StateContainer::<SingleWriter>::new(PATH.as_ref());
+        let mut state2 = StateContainer::<SingleWriter>::new(PATH.as_ref());
 
-        assert!(state1
-            .state_write(true, WriteLockMode::SingleWriter)
-            .is_ok());
+        assert!(state1.state_write(true).is_ok());
         assert!(matches!(
-            state2.state_write(true, WriteLockMode::SingleWriter),
+            state2.state_write(true),
             Err(SynchronizerError::WriteLockConflict)
         ));
     }
@@ -237,15 +218,11 @@ mod tests {
     #[test]
     fn single_writer_lock_freed_on_drop() {
         static PATH: &str = "/tmp/single_writer_lock_drop_test";
-        let mut state1 = StateContainer::new(PATH.as_ref());
-        let mut state2 = StateContainer::new(PATH.as_ref());
+        let mut state1 = StateContainer::<SingleWriter>::new(PATH.as_ref());
+        let mut state2 = StateContainer::<SingleWriter>::new(PATH.as_ref());
 
-        assert!(state1
-            .state_write(true, WriteLockMode::SingleWriter)
-            .is_ok());
+        assert!(state1.state_write(true).is_ok());
         drop(state1);
-        assert!(state2
-            .state_write(true, WriteLockMode::SingleWriter)
-            .is_ok());
+        assert!(state2.state_write(true).is_ok());
     }
 }

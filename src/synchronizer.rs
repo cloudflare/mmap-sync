@@ -18,6 +18,7 @@ use wyhash::WyHash;
 use crate::data::DataContainer;
 use crate::guard::{ReadGuard, ReadResult};
 use crate::instance::InstanceVersion;
+use crate::locks::{Disabled, WriteLockStrategy};
 use crate::state::StateContainer;
 use crate::synchronizer::SynchronizerError::*;
 
@@ -29,21 +30,21 @@ use crate::synchronizer::SynchronizerError::*;
 ///   - `H` - hasher used for checksum calculation
 ///   - `N` - serializer scratch space size
 ///   - `SD` - sleep duration in nanoseconds used by writer during lock acquisition (default 1s)
+///   - `WL` - optional write locking to prevent multiple writers. (default [`Disabled`])
 pub struct Synchronizer<
     H: Hasher + Default = WyHash,
     const N: usize = 1024,
     const SD: u64 = 1_000_000_000,
+    WL = Disabled,
 > {
     /// Container storing state mmap
-    state_container: StateContainer,
+    state_container: StateContainer<WL>,
     /// Container storing data mmap
     data_container: DataContainer,
     /// Hasher used for checksum calculation
     build_hasher: BuildHasherDefault<H>,
     /// Re-usable buffer for serialization
     serialize_buffer: Option<AlignedVec>,
-    /// Protect against multiple writers with the `flock` Unix API
-    write_lock_mode: WriteLockMode,
 }
 
 /// `SynchronizerError` enumerates all possible errors returned by this library.
@@ -84,7 +85,11 @@ impl Synchronizer {
     }
 }
 
-impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> {
+impl<'a, H, const N: usize, const SD: u64, WL> Synchronizer<H, N, SD, WL>
+where
+    H: Hasher + Default,
+    WL: WriteLockStrategy<'a>,
+{
     /// Create new instance of `Synchronizer` using given `path_prefix` and template parameters
     pub fn with_params(path_prefix: &OsStr) -> Self {
         Synchronizer {
@@ -92,7 +97,6 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
             data_container: DataContainer::new(path_prefix),
             build_hasher: BuildHasherDefault::default(),
             serialize_buffer: Some(AlignedVec::new()),
-            write_lock_mode: WriteLockMode::Disabled,
         }
     }
 
@@ -114,7 +118,7 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
     /// A result containing a tuple of the number of bytes written and a boolean indicating whether
     /// the reader count was reset, or a `SynchronizerError` if the operation fails.
     pub fn write<T>(
-        &mut self,
+        &'a mut self,
         entity: &T,
         grace_duration: Duration,
     ) -> Result<(usize, bool), SynchronizerError>
@@ -140,9 +144,7 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
         check_archived_root::<T>(&data).map_err(|_| FailedEntityRead)?;
 
         // fetch current state from mapped memory
-        let state = self
-            .state_container
-            .state_write(true, self.write_lock_mode)?;
+        let state = self.state_container.state_write(true)?;
 
         // calculate data checksum
         let mut hasher = self.build_hasher.build_hasher();
@@ -168,7 +170,7 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
     /// Returns number of bytes written to data file and a boolean flag, for diagnostic purposes,
     /// indicating that we have reset our readers counter after a reader died without decrementing it.
     pub fn write_raw<T>(
-        &mut self,
+        &'a mut self,
         data: &[u8],
         grace_duration: Duration,
     ) -> Result<(usize, bool), SynchronizerError>
@@ -177,9 +179,7 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
         T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
     {
         // fetch current state from mapped memory
-        let state = self
-            .state_container
-            .state_write(true, self.write_lock_mode)?;
+        let state = self.state_container.state_write(true)?;
 
         // calculate data checksum
         let mut hasher = self.build_hasher.build_hasher();
@@ -216,7 +216,10 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
     /// `rkyv::archived_root` function, which has its own safety considerations. Particularly, it
     /// assumes the byte slice provided to it accurately represents an archived object, and that the
     /// root of the object is stored at the end of the slice.
-    pub unsafe fn read<T>(&mut self, check_bytes: bool) -> Result<ReadResult<T>, SynchronizerError>
+    pub unsafe fn read<T>(
+        &'a mut self,
+        check_bytes: bool,
+    ) -> Result<ReadResult<T>, SynchronizerError>
     where
         T: Archive,
         T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
@@ -244,102 +247,12 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
 
     /// Returns current `InstanceVersion` stored within the state, useful for detecting
     /// whether synchronized `entity` has changed.
-    pub fn version(&mut self) -> Result<InstanceVersion, SynchronizerError> {
+    pub fn version(&'a mut self) -> Result<InstanceVersion, SynchronizerError> {
         // fetch current state from mapped memory
         let state = self.state_container.state_read(false)?;
 
         // fetch current version
         state.version()
-    }
-}
-
-/// Configures how a synchronizer uses write locks.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum WriteLockMode {
-    /// Write-locking is disabled. This mode implies that there is only a single writer or that
-    /// writers are synchronized out-of-band.
-    #[default]
-    Disabled,
-    /// Use locks to ensure that only a single register is registered. The lock is registered once
-    /// by the writer and held until the writer terminates.
-    SingleWriter,
-}
-
-/// A builder to configure [`Synchronizer`] options.
-#[derive(Clone, Debug)]
-pub struct SynchronizerBuilder<'a> {
-    path_prefix: &'a OsStr,
-    write_lock_mode: WriteLockMode,
-}
-
-impl<'a> SynchronizerBuilder<'a> {
-    /// Create a new builder using the provided path prefix.
-    pub fn new(path_prefix: &'a OsStr) -> Self {
-        Self {
-            path_prefix,
-            write_lock_mode: WriteLockMode::Disabled,
-        }
-    }
-
-    /// Construct the final synchronizer with the configured options.
-    ///
-    /// # Examples
-    /// ```
-    /// use mmap_sync::synchronizer::{SynchronizerBuilder, WriteLockMode};
-    ///
-    /// let mut writer = SynchronizerBuilder::new("/tmp/builder_example".as_ref())
-    ///     .build();
-    /// ```
-    pub fn build(&self) -> Synchronizer {
-        Synchronizer {
-            state_container: StateContainer::new(self.path_prefix),
-            data_container: DataContainer::new(self.path_prefix),
-            build_hasher: BuildHasherDefault::default(),
-            serialize_buffer: Some(AlignedVec::new()),
-            write_lock_mode: self.write_lock_mode,
-        }
-    }
-
-    /// # Examples
-    /// ```
-    /// use mmap_sync::synchronizer::{Synchronizer, SynchronizerBuilder};
-    /// use std::collections::hash_map::DefaultHasher;
-    ///
-    /// let mut writer: Synchronizer<DefaultHasher, 2048, 1_000_000> = SynchronizerBuilder::new("/tmp/builder_example".as_ref())
-    ///     .build_with_params();
-    /// ```
-    pub fn build_with_params<H: Hasher + Default, const N: usize, const SD: u64>(
-        &self,
-    ) -> Synchronizer<H, N, SD> {
-        Synchronizer {
-            state_container: StateContainer::new(self.path_prefix),
-            data_container: DataContainer::new(self.path_prefix),
-            build_hasher: BuildHasherDefault::default(),
-            serialize_buffer: Some(AlignedVec::new()),
-            write_lock_mode: self.write_lock_mode,
-        }
-    }
-
-    /// Configure the locking mode that will be used when making writes with the resulting
-    /// synchronizer. This option will have no effect if the synchronizer is only used to read.
-    ///
-    /// The default lock mode is [`WriteLockMode::Disabled`].
-    ///
-    /// # Examples
-    /// ```
-    /// use mmap_sync::synchronizer::{SynchronizerBuilder, WriteLockMode};
-    ///
-    /// let mut writer = SynchronizerBuilder::new("/tmp/builder_example".as_ref())
-    ///     .enable_write_locking(WriteLockMode::SingleWriter)
-    ///     .build();
-    /// ```
-    #[cfg(all(unix, feature = "write-lock"))]
-    #[cfg_attr(docsrs, doc(cfg(feature = "write-lock")))]
-    pub fn enable_write_locking(self, mode: WriteLockMode) -> Self {
-        Self {
-            write_lock_mode: mode,
-            ..self
-        }
     }
 }
 

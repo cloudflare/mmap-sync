@@ -1,0 +1,146 @@
+//! Lock strategies.
+
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+use std::{
+    fs::File,
+    ops::{Deref, DerefMut},
+};
+
+use memmap2::MmapMut;
+
+use crate::synchronizer::SynchronizerError;
+
+/// The write lock strategy supports different lock implementations which can be chosen based on
+/// the guarantees required, platform support, and performance constraints.
+pub trait WriteLockStrategy<'a> {
+    type Guard: DerefMut<Target = MmapMut> + 'a;
+
+    /// Create a new instance of this lock strategy.
+    ///
+    /// The `mmap` parameter will have write access controlled by the lock.
+    ///
+    /// The `file` parameter is required because lock strategies depending on `flock` must hold
+    /// the file descriptor open so the kernel does not release the lock.
+    fn new(mmap: MmapMut, file: File) -> Self;
+
+    /// Provide read access to mmaped memory.
+    fn read(&'a self) -> &'a MmapMut;
+
+    /// Acquire the lock as specified by the lock strategy.
+    ///
+    /// On success, return a lock guard which can be used to access the underlying mmaped memory
+    /// via [`Deref`]/[`DerefMut`].
+    fn lock(&'a mut self) -> Result<Self::Guard, SynchronizerError>;
+}
+
+/// Lock protection is disabled.
+///
+/// # Safety
+/// Callers must ensure that there is only a single active writer. For example, the caller might
+/// ensure that only one process attempts to write to the synchronizer, and ensure that multiple
+/// instances of the process are not spawned.
+pub struct Disabled(MmapMut);
+
+impl<'a> WriteLockStrategy<'a> for Disabled {
+    type Guard = DisabledGuard<'a>;
+
+    #[inline]
+    fn new(mmap: MmapMut, _file: File) -> Self {
+        // No need to hold the file descriptor because lock functionality is disabled.
+        Self(mmap)
+    }
+
+    #[inline]
+    fn read(&'a self) -> &'a MmapMut {
+        &self.0
+    }
+
+    #[inline]
+    fn lock(&'a mut self) -> Result<Self::Guard, SynchronizerError> {
+        Ok(DisabledGuard(&mut self.0))
+    }
+}
+
+pub struct DisabledGuard<'a>(&'a mut MmapMut);
+
+impl<'a> Deref for DisabledGuard<'a> {
+    type Target = MmapMut;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+impl<'a> DerefMut for DisabledGuard<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut *self.0
+    }
+}
+
+/// Acquire the lock. Once acquired, hold the lock until dropped.
+///
+/// The `flock` API holds the lock as long as the file descriptor is open, and closes the lock
+/// when the descriptor is closed. The descriptor is automatically closed when `File` is dropped.
+#[cfg(unix)]
+pub struct SingleWriter {
+    mmap: MmapMut,
+    file: File,
+
+    locked: bool,
+}
+
+#[cfg(unix)]
+impl<'a> WriteLockStrategy<'a> for SingleWriter {
+    type Guard = SingleWriterGuard<'a>;
+
+    #[inline]
+    fn new(mmap: MmapMut, file: File) -> Self {
+        Self {
+            mmap,
+            file,
+            locked: false,
+        }
+    }
+
+    #[inline]
+    fn read(&'a self) -> &'a MmapMut {
+        &self.mmap
+    }
+
+    #[inline]
+    fn lock(&'a mut self) -> Result<Self::Guard, SynchronizerError> {
+        // We already hold the lock, so return success.
+        if self.locked {
+            return Ok(SingleWriterGuard(&mut self.mmap));
+        }
+
+        // Acquire the lock for the first time.
+        match unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } {
+            0 => {
+                // Hold the lock until this structure is dropped.
+                self.locked = true;
+                Ok(SingleWriterGuard(&mut self.mmap))
+            }
+            _ => Err(SynchronizerError::WriteLockConflict),
+        }
+    }
+}
+
+/// A simple guard which does not release the lock upon being dropped.
+#[cfg(unix)]
+pub struct SingleWriterGuard<'a>(&'a mut MmapMut);
+
+impl<'a> Deref for SingleWriterGuard<'a> {
+    type Target = MmapMut;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+impl<'a> DerefMut for SingleWriterGuard<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut *self.0
+    }
+}

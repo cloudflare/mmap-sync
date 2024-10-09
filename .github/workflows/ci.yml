@@ -33,9 +33,6 @@ jobs:
       - name: Run cargo test
         run: cargo test
 
-      - name: Test write-lock feature
-        run: cargo test --features write-lock
-
   lints:
     name: Lints
     runs-on: ubuntu-latest

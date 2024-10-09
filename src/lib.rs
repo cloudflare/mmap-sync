@@ -13,5 +13,6 @@
 mod data;
 pub mod guard;
 pub mod instance;
+pub mod locks;
 mod state;
 pub mod synchronizer;
