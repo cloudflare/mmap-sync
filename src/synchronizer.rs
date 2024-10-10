@@ -18,6 +18,7 @@ use wyhash::WyHash;
 use crate::data::DataContainer;
 use crate::guard::{ReadGuard, ReadResult};
 use crate::instance::InstanceVersion;
+use crate::locks::{Disabled, WriteLockStrategy};
 use crate::state::StateContainer;
 use crate::synchronizer::SynchronizerError::*;
 
@@ -29,13 +30,15 @@ use crate::synchronizer::SynchronizerError::*;
 ///   - `H` - hasher used for checksum calculation
 ///   - `N` - serializer scratch space size
 ///   - `SD` - sleep duration in nanoseconds used by writer during lock acquisition (default 1s)
+///   - `WL` - optional write locking to prevent multiple writers. (default [`Disabled`])
 pub struct Synchronizer<
     H: Hasher + Default = WyHash,
     const N: usize = 1024,
     const SD: u64 = 1_000_000_000,
+    WL = Disabled,
 > {
     /// Container storing state mmap
-    state_container: StateContainer,
+    state_container: StateContainer<WL>,
     /// Container storing data mmap
     data_container: DataContainer,
     /// Hasher used for checksum calculation
@@ -70,6 +73,9 @@ pub enum SynchronizerError {
     /// The instance version parameters were invalid.
     #[error("invalid instance version params")]
     InvalidInstanceVersionParams,
+    /// Write locking is enabled and the lock is held by another writer.
+    #[error("write blocked by conflicting lock")]
+    WriteLockConflict,
 }
 
 impl Synchronizer {
@@ -79,7 +85,11 @@ impl Synchronizer {
     }
 }
 
-impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> {
+impl<'a, H, const N: usize, const SD: u64, WL> Synchronizer<H, N, SD, WL>
+where
+    H: Hasher + Default,
+    WL: WriteLockStrategy<'a>,
+{
     /// Create new instance of `Synchronizer` using given `path_prefix` and template parameters
     pub fn with_params(path_prefix: &OsStr) -> Self {
         Synchronizer {
@@ -108,7 +118,7 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
     /// A result containing a tuple of the number of bytes written and a boolean indicating whether
     /// the reader count was reset, or a `SynchronizerError` if the operation fails.
     pub fn write<T>(
-        &mut self,
+        &'a mut self,
         entity: &T,
         grace_duration: Duration,
     ) -> Result<(usize, bool), SynchronizerError>
@@ -134,7 +144,7 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
         check_archived_root::<T>(&data).map_err(|_| FailedEntityRead)?;
 
         // fetch current state from mapped memory
-        let state = self.state_container.state(true)?;
+        let state = self.state_container.state_write(true)?;
 
         // calculate data checksum
         let mut hasher = self.build_hasher.build_hasher();
@@ -160,7 +170,7 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
     /// Returns number of bytes written to data file and a boolean flag, for diagnostic purposes,
     /// indicating that we have reset our readers counter after a reader died without decrementing it.
     pub fn write_raw<T>(
-        &mut self,
+        &'a mut self,
         data: &[u8],
         grace_duration: Duration,
     ) -> Result<(usize, bool), SynchronizerError>
@@ -169,7 +179,7 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
         T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
     {
         // fetch current state from mapped memory
-        let state = self.state_container.state(true)?;
+        let state = self.state_container.state_write(true)?;
 
         // calculate data checksum
         let mut hasher = self.build_hasher.build_hasher();
@@ -206,13 +216,16 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
     /// `rkyv::archived_root` function, which has its own safety considerations. Particularly, it
     /// assumes the byte slice provided to it accurately represents an archived object, and that the
     /// root of the object is stored at the end of the slice.
-    pub unsafe fn read<T>(&mut self, check_bytes: bool) -> Result<ReadResult<T>, SynchronizerError>
+    pub unsafe fn read<T>(
+        &'a mut self,
+        check_bytes: bool,
+    ) -> Result<ReadResult<T>, SynchronizerError>
     where
         T: Archive,
         T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
     {
         // fetch current state from mapped memory
-        let state = self.state_container.state(false)?;
+        let state = self.state_container.state_read(false)?;
 
         // fetch current version
         let version = state.version()?;
@@ -234,9 +247,9 @@ impl<H: Hasher + Default, const N: usize, const SD: u64> Synchronizer<H, N, SD> 
 
     /// Returns current `InstanceVersion` stored within the state, useful for detecting
     /// whether synchronized `entity` has changed.
-    pub fn version(&mut self) -> Result<InstanceVersion, SynchronizerError> {
+    pub fn version(&'a mut self) -> Result<InstanceVersion, SynchronizerError> {
         // fetch current state from mapped memory
-        let state = self.state_container.state(false)?;
+        let state = self.state_container.state_read(false)?;
 
         // fetch current version
         state.version()
