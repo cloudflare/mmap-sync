@@ -144,12 +144,14 @@ impl<'a> WriteLockStrategySealed<'a> for SingleWriter {
     }
 }
 
+#[cfg(unix)]
 impl<'a> WriteLockStrategy<'a> for SingleWriter {}
 
 /// A simple guard which does not release the lock upon being dropped.
 #[cfg(unix)]
 pub struct SingleWriterGuard<'a>(&'a mut MmapMut);
 
+#[cfg(unix)]
 impl<'a> Deref for SingleWriterGuard<'a> {
     type Target = MmapMut;
 
@@ -158,6 +160,7 @@ impl<'a> Deref for SingleWriterGuard<'a> {
     }
 }
 
+#[cfg(unix)]
 impl<'a> DerefMut for SingleWriterGuard<'a> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut *self.0
