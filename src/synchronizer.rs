@@ -121,7 +121,7 @@ where
         &'a mut self,
         entity: &T,
         grace_duration: Duration,
-    ) -> Result<(usize, bool), SynchronizerError>
+    ) -> Result<(usize, bool, u128), SynchronizerError>
     where
         T: Serialize<AllocSerializer<N>>,
         T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
@@ -144,16 +144,18 @@ where
         check_archived_root::<T>(&data).map_err(|_| FailedEntityRead)?;
 
         // fetch current state from mapped memory
+        let acquire_time = std::time::Instant::now();
         let state = self.state_container.state::<true>(true)?;
+
+        // acquire next available data file idx and write data to it
+        let acquire_sleep_duration = Duration::from_nanos(SD);
+        let (new_idx, reset) = state.acquire_next_idx(grace_duration, acquire_sleep_duration);
+        let elapsed_time = acquire_time.elapsed();
 
         // calculate data checksum
         let mut hasher = self.build_hasher.build_hasher();
         hasher.write(&data);
         let checksum = hasher.finish();
-
-        // acquire next available data file idx and write data to it
-        let acquire_sleep_duration = Duration::from_nanos(SD);
-        let (new_idx, reset) = state.acquire_next_idx(grace_duration, acquire_sleep_duration);
         let new_version = InstanceVersion::new(new_idx, data.len(), checksum)?;
         let size = self.data_container.write(&data, new_version)?;
 
@@ -163,7 +165,7 @@ where
         // Restore buffer for potential reuse
         self.serialize_buffer.replace(data);
 
-        Ok((size, reset))
+        Ok((size, reset, elapsed_time.as_nanos()))
     }
 
     /// Write raw data bytes representing type `T` into the next available data file.
@@ -219,12 +221,14 @@ where
     pub unsafe fn read<T>(
         &'a mut self,
         check_bytes: bool,
+        elapsed_time_ns: &mut u128,
     ) -> Result<ReadResult<T>, SynchronizerError>
     where
         T: Archive,
         T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
     {
         // fetch current state from mapped memory
+        let acquire_time = std::time::Instant::now();
         let state = self.state_container.state::<false>(false)?;
 
         // fetch current version
@@ -232,6 +236,7 @@ where
 
         // create and lock state guard for reading
         let guard = ReadGuard::new(state, version)?;
+        *elapsed_time_ns = acquire_time.elapsed().as_nanos();
 
         // fetch data for current version from mapped memory
         let (data, switched) = self.data_container.data(version)?;
@@ -325,7 +330,8 @@ mod tests {
         let mut entity_generator = MockEntityGenerator::new(3);
 
         // check that `read` returns error when writer didn't write yet
-        let res = unsafe { reader.read::<MockEntity>(false) };
+        let mut resource_acquistion_time = 0_u128;
+        let res = unsafe { reader.read::<MockEntity>(false, &mut resource_acquistion_time) };
         assert!(res.is_err());
         assert_eq!(
             res.err().unwrap().to_string(),
@@ -335,7 +341,7 @@ mod tests {
 
         // check if can write entity with correct size
         let entity = entity_generator.gen(100);
-        let (size, reset) = writer.write(&entity, Duration::from_secs(1)).unwrap();
+        let (size, reset, _) = writer.write(&entity, Duration::from_secs(1)).unwrap();
         assert!(size > 0);
         assert_eq!(reset, false);
         assert!(Path::new(&state_path).exists());
@@ -353,7 +359,7 @@ mod tests {
 
         // check if can write entity again
         let entity = entity_generator.gen(200);
-        let (size, reset) = writer.write(&entity, Duration::from_secs(1)).unwrap();
+        let (size, reset, _) = writer.write(&entity, Duration::from_secs(1)).unwrap();
         assert!(size > 0);
         assert_eq!(reset, false);
         assert!(Path::new(&state_path).exists());
@@ -369,7 +375,7 @@ mod tests {
 
         // write entity twice to switch to the same `idx` without any reads in between
         let entity = entity_generator.gen(100);
-        let (size, reset) = writer.write(&entity, Duration::from_secs(1)).unwrap();
+        let (size, reset, _) = writer.write(&entity, Duration::from_secs(1)).unwrap();
         assert!(size > 0);
         assert_eq!(reset, false);
         assert_eq!(
@@ -378,7 +384,7 @@ mod tests {
         );
 
         let entity = entity_generator.gen(200);
-        let (size, reset) = writer.write(&entity, Duration::from_secs(1)).unwrap();
+        let (size, reset, _) = writer.write(&entity, Duration::from_secs(1)).unwrap();
         assert!(size > 0);
         assert_eq!(reset, false);
         assert_eq!(
@@ -394,10 +400,12 @@ mod tests {
         expected_entity: &MockEntity,
         expected_is_switched: bool,
     ) {
-        let actual_entity = unsafe { synchronizer.read::<MockEntity>(false).unwrap() };
+        let mut resource_acquistion_time = 0_u128;
+        let actual_entity = unsafe { synchronizer.read::<MockEntity>(false, &mut resource_acquistion_time).unwrap() };
         assert_eq!(actual_entity.map, expected_entity.map);
         assert_eq!(actual_entity.version, expected_entity.version);
         assert_eq!(actual_entity.is_switched(), expected_is_switched);
+        assert_ne!(resource_acquistion_time, 0);
     }
 
     #[test]
