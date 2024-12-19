@@ -1,3 +1,5 @@
+use std::env;
+use std::fs;
 use std::time::Duration;
 
 use bytecheck::CheckBytes;
@@ -28,8 +30,41 @@ fn build_mock_data() -> (HelloWorld, AlignedVec) {
     (data, bytes)
 }
 
+fn derive_shm_path(subpath : &str) -> String {
+    const EV_NAME : &str = "MMAPSYNC_BM_ROOTDIR";
+    const DEFAULT_ROOT : &str = "/dev/shm"; // respect original functionality
+
+    let selected_root : String = match env::var(EV_NAME) {
+        Ok(val) => {
+            let requested_root = val.trim();
+
+            if requested_root.is_empty() {
+                // allow "empty" variable to represent default
+                DEFAULT_ROOT.into()
+            } else {
+                // now check that configured path exists and is a directory, warning if not
+                if match fs::metadata(requested_root) {
+                    Ok(md) if md.is_dir() => true,
+                    _ => false,
+                } {
+                    requested_root.into()
+                } else {
+                    eprintln!("requested root directory '{requested_root}' specified in environment variable '{EV_NAME}' does not exist or is not a directory; will attempt to use default location '{DEFAULT_ROOT}'");
+
+                    DEFAULT_ROOT.into()
+                }
+            }
+        },
+        Err(_e) => {
+            DEFAULT_ROOT.into()
+        }
+    };
+
+    format!("{selected_root}/{subpath}")
+}
+
 pub fn bench_synchronizer(c: &mut Criterion) {
-    let mut synchronizer = Synchronizer::new("/dev/shm/hello_world".as_ref());
+    let mut synchronizer = Synchronizer::new(derive_shm_path("hello_world").as_ref());
     let (data, bytes) = build_mock_data();
 
     let mut group = c.benchmark_group("synchronizer");
@@ -71,8 +106,8 @@ fn build_synchronizers_for_strategies() -> (
     Synchronizer<WyHash, LockDisabled, 1024, 1_000_000_000>,
     Synchronizer<WyHash, SingleWriter, 1024, 1_000_000_000>,
 ) {
-    let disabled_path = "/dev/shm/mmap_sync_lock_disabled";
-    let single_writer_path = "/dev/shm/mmap_sync_lock_single_writer";
+    let disabled_path = derive_shm_path("mmap_sync_lock_disabled");
+    let single_writer_path = derive_shm_path("mmap_sync_lock_single_writer");
 
     (
         Synchronizer::<WyHash, LockDisabled, 1024, 1_000_000_000>::with_params(
