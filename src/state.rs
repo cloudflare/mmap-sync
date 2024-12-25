@@ -162,7 +162,7 @@ impl<'a, WL: WriteLockStrategy<'a>> StateContainer<WL> {
 
         let mut need_init = false;
         // Reset state file size to match exactly `STATE_SIZE`
-        if state_file.metadata().map_err(FailedStateRead)?.len() as usize != STATE_SIZE {
+        if state_file.metadata().map_err(FailedStateRead)?.len() != STATE_SIZE as u64 {
             state_file
                 .set_len(STATE_SIZE as u64)
                 .map_err(FailedStateRead)?;
