@@ -36,7 +36,7 @@ impl<'a> ReadGuard<'a> {
     }
 }
 
-impl<'a> Drop for ReadGuard<'a> {
+impl Drop for ReadGuard<'_> {
     /// Unlocks stored `version` when `ReadGuard` goes out of scope
     fn drop(&mut self) {
         self.state.runlock(self.version);
@@ -66,7 +66,7 @@ impl<'a, T: Archive> ReadResult<'a, T> {
     }
 }
 
-impl<'a, T: Archive> Deref for ReadResult<'a, T> {
+impl<T: Archive> Deref for ReadResult<'_, T> {
     type Target = Archived<T>;
 
     /// Dereferences stored `entity` for easier access

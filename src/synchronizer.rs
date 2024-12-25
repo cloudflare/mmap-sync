@@ -219,7 +219,7 @@ where
     pub unsafe fn read<T>(
         &'a mut self,
         check_bytes: bool,
-    ) -> Result<ReadResult<T>, SynchronizerError>
+    ) -> Result<ReadResult<'a, T>, SynchronizerError>
     where
         T: Archive,
         T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
