@@ -17,7 +17,6 @@ use std::ops::Deref;
 
 use crate::instance::InstanceVersion;
 use crate::state::State;
-use crate::synchronizer::SynchronizerError;
 
 /// An RAII implementation of a “scoped read lock” of a `State`
 pub(crate) struct ReadGuard<'a> {
@@ -27,12 +26,9 @@ pub(crate) struct ReadGuard<'a> {
 
 impl<'a> ReadGuard<'a> {
     /// Creates new `ReadGuard` with specified parameters
-    pub(crate) fn new(
-        state: &'a mut State,
-        version: InstanceVersion,
-    ) -> Result<Self, SynchronizerError> {
+    pub(crate) fn new(state: &'a mut State, version: InstanceVersion) -> Self {
         state.rlock(version);
-        Ok(ReadGuard { version, state })
+        ReadGuard { version, state }
     }
 }
 

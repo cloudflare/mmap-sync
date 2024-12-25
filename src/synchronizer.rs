@@ -231,7 +231,7 @@ where
         let version = state.version()?;
 
         // create and lock state guard for reading
-        let guard = ReadGuard::new(state, version)?;
+        let guard = ReadGuard::new(state, version);
 
         // fetch data for current version from mapped memory
         let (data, switched) = self.data_container.data(version)?;
