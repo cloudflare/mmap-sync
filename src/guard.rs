@@ -52,9 +52,9 @@ pub struct ReadResult<'a, T: Archive> {
 
 impl<'a, T: Archive> ReadResult<'a, T> {
     /// Creates new `ReadResult` with specified parameters
-    pub(crate) fn new(_guard: ReadGuard<'a>, entity: &'a Archived<T>, switched: bool) -> Self {
+    pub(crate) fn new(guard: ReadGuard<'a>, entity: &'a Archived<T>, switched: bool) -> Self {
         ReadResult {
-            _guard,
+            _guard: guard,
             entity,
             switched,
         }
