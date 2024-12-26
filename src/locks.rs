@@ -77,11 +77,11 @@ impl<'a> WriteLockStrategySealed<'a> for LockDisabled {
     }
 }
 
-impl<'a> WriteLockStrategy<'a> for LockDisabled {}
+impl WriteLockStrategy<'_> for LockDisabled {}
 
 pub struct DisabledGuard<'a>(&'a mut MmapMut);
 
-impl<'a> Deref for DisabledGuard<'a> {
+impl Deref for DisabledGuard<'_> {
     type Target = MmapMut;
 
     fn deref(&self) -> &Self::Target {
@@ -89,7 +89,7 @@ impl<'a> Deref for DisabledGuard<'a> {
     }
 }
 
-impl<'a> DerefMut for DisabledGuard<'a> {
+impl DerefMut for DisabledGuard<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut *self.0
     }
@@ -145,14 +145,14 @@ impl<'a> WriteLockStrategySealed<'a> for SingleWriter {
 }
 
 #[cfg(unix)]
-impl<'a> WriteLockStrategy<'a> for SingleWriter {}
+impl WriteLockStrategy<'_> for SingleWriter {}
 
 /// A simple guard which does not release the lock upon being dropped.
 #[cfg(unix)]
 pub struct SingleWriterGuard<'a>(&'a mut MmapMut);
 
 #[cfg(unix)]
-impl<'a> Deref for SingleWriterGuard<'a> {
+impl Deref for SingleWriterGuard<'_> {
     type Target = MmapMut;
 
     fn deref(&self) -> &Self::Target {
@@ -161,7 +161,7 @@ impl<'a> Deref for SingleWriterGuard<'a> {
 }
 
 #[cfg(unix)]
-impl<'a> DerefMut for SingleWriterGuard<'a> {
+impl DerefMut for SingleWriterGuard<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut *self.0
     }

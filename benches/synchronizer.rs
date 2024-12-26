@@ -30,11 +30,11 @@ fn build_mock_data() -> (HelloWorld, AlignedVec) {
     (data, bytes)
 }
 
-fn derive_shm_path(subpath : &str) -> String {
-    const EV_NAME : &str = "MMAPSYNC_BM_ROOTDIR";
-    const DEFAULT_ROOT : &str = "/dev/shm"; // respect original functionality
+fn derive_shm_path(subpath: &str) -> String {
+    const EV_NAME: &str = "MMAPSYNC_BM_ROOTDIR";
+    const DEFAULT_ROOT: &str = "/dev/shm"; // respect original functionality
 
-    let selected_root : String = match env::var(EV_NAME) {
+    let selected_root: String = match env::var(EV_NAME) {
         Ok(val) => {
             let requested_root = val.trim();
 
@@ -54,10 +54,8 @@ fn derive_shm_path(subpath : &str) -> String {
                     DEFAULT_ROOT.into()
                 }
             }
-        },
-        Err(_e) => {
-            DEFAULT_ROOT.into()
         }
+        Err(_e) => DEFAULT_ROOT.into(),
     };
 
     format!("{selected_root}/{subpath}")

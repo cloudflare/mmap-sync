@@ -50,7 +50,7 @@ The templated type `T` for `Synchronizer` can be any Rust struct implementing sp
 To use `mmap-sync`, add it to your `Cargo.toml` under `[dependencies]`:
 ```toml
 [dependencies]
-mmap-sync = "1"
+mmap-sync = "2.0.0"
 ```
 Then, import `mmap-sync` in your Rust program:
 ```rust

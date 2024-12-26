@@ -72,9 +72,8 @@ impl State {
                 num_readers.store(0, Ordering::SeqCst);
                 reset = true;
                 break;
-            } else {
-                thread::sleep(sleep_duration);
             }
+            thread::sleep(sleep_duration);
         }
 
         (next_idx, reset)
@@ -162,7 +161,7 @@ impl<'a, WL: WriteLockStrategy<'a>> StateContainer<WL> {
 
         let mut need_init = false;
         // Reset state file size to match exactly `STATE_SIZE`
-        if state_file.metadata().map_err(FailedStateRead)?.len() as usize != STATE_SIZE {
+        if state_file.metadata().map_err(FailedStateRead)?.len() != STATE_SIZE as u64 {
             state_file
                 .set_len(STATE_SIZE as u64)
                 .map_err(FailedStateRead)?;
@@ -175,9 +174,9 @@ impl<'a, WL: WriteLockStrategy<'a>> StateContainer<WL> {
             let new_state = State::default();
             unsafe {
                 mmap.as_mut_ptr()
-                    .copy_from((&new_state as *const State) as *const u8, STATE_SIZE)
-            };
-        };
+                    .copy_from((&new_state as *const State) as *const u8, STATE_SIZE);
+            }
+        }
 
         self.mmap = Some(WL::new(mmap, state_file));
         Ok(())

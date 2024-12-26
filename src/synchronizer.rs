@@ -219,7 +219,7 @@ where
     pub unsafe fn read<T>(
         &'a mut self,
         check_bytes: bool,
-    ) -> Result<ReadResult<T>, SynchronizerError>
+    ) -> Result<ReadResult<'a, T>, SynchronizerError>
     where
         T: Archive,
         T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
@@ -231,7 +231,7 @@ where
         let version = state.version()?;
 
         // create and lock state guard for reading
-        let guard = ReadGuard::new(state, version)?;
+        let guard = ReadGuard::new(state, version);
 
         // fetch data for current version from mapped memory
         let (data, switched) = self.data_container.data(version)?;
