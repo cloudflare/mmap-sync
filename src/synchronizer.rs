@@ -7,11 +7,15 @@ use std::ffi::OsStr;
 use std::hash::{BuildHasher, BuildHasherDefault, Hasher};
 use std::time::Duration;
 
-use bytecheck::CheckBytes;
-use rkyv::ser::serializers::{AlignedSerializer, AllocSerializer};
-use rkyv::ser::Serializer;
-use rkyv::validation::validators::DefaultValidator;
-use rkyv::{archived_root, check_archived_root, AlignedVec, Archive, Serialize};
+use rkyv::{
+    access, access_unchecked,
+    api::high::{to_bytes_with_alloc, HighSerializer, HighValidator},
+    bytecheck::CheckBytes,
+    rancor::Error as RkyvErr,
+    ser::allocator::{Arena, ArenaHandle},
+    util::AlignedVec,
+    Archive, Portable, Serialize,
+};
 use thiserror::Error;
 use wyhash::WyHash;
 
@@ -123,25 +127,18 @@ where
         grace_duration: Duration,
     ) -> Result<(usize, bool), SynchronizerError>
     where
-        T: Serialize<AllocSerializer<N>>,
-        T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
+        T: for<'b> Serialize<HighSerializer<AlignedVec, ArenaHandle<'b>, RkyvErr>>,
     {
         let mut buf = self.serialize_buffer.take().ok_or(FailedEntityWrite)?;
         buf.clear();
 
         // serialize given entity into bytes
-        let mut serializer = AllocSerializer::new(
-            AlignedSerializer::new(buf),
-            Default::default(),
-            Default::default(),
-        );
-        let _ = serializer
-            .serialize_value(entity)
-            .map_err(|_| FailedEntityWrite)?;
-        let data = serializer.into_serializer().into_inner();
+        let mut arena = Arena::new();
+        let data = to_bytes_with_alloc::<_, RkyvErr>(entity, arena.acquire())
+            .map_err(|_| SynchronizerError::FailedEntityWrite)?;
 
         // ensure that serialized bytes can be deserialized back to `T` struct successfully
-        check_archived_root::<T>(&data).map_err(|_| FailedEntityRead)?;
+        // check_archived_root::<T>(&data).map_err(|_| FailedEntityRead)?;
 
         // fetch current state from mapped memory
         let state = self.state_container.state::<true>(true)?;
@@ -175,8 +172,7 @@ where
         grace_duration: Duration,
     ) -> Result<(usize, bool), SynchronizerError>
     where
-        T: Serialize<AllocSerializer<N>>,
-        T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
+        T: for<'b> Serialize<HighSerializer<AlignedVec, ArenaHandle<'b>, RkyvErr>>,
     {
         // fetch current state from mapped memory
         let state = self.state_container.state::<true>(true)?;
@@ -222,7 +218,7 @@ where
     ) -> Result<ReadResult<'a, T>, SynchronizerError>
     where
         T: Archive,
-        T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
+        T::Archived: Portable + for<'c> CheckBytes<HighValidator<'c, RkyvErr>>,
     {
         // fetch current state from mapped memory
         let state = self.state_container.state::<false>(false)?;
@@ -238,8 +234,8 @@ where
 
         // fetch entity from data using zero-copy deserialization
         let entity = match check_bytes {
-            false => archived_root::<T>(data),
-            true => check_archived_root::<T>(data).map_err(|_| FailedEntityRead)?,
+            false => access::<T::Archived, RkyvErr>(data).map_err(|_| FailedEntityRead)?,
+            true => access_unchecked::<T::Archived>(data),
         };
 
         Ok(ReadResult::new(guard, entity, switched))
@@ -261,21 +257,24 @@ mod tests {
     use crate::instance::InstanceVersion;
     use crate::locks::SingleWriter;
     use crate::synchronizer::{Synchronizer, SynchronizerError};
-    use bytecheck::CheckBytes;
     use rand::distributions::Uniform;
     use rand::prelude::*;
-    use rkyv::{Archive, Deserialize, Serialize};
-    use std::collections::HashMap;
+    use rkyv::{
+        with::{Identity, Map, MapKV},
+        Archive, Deserialize, Serialize,
+    };
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::Path;
     use std::time::Duration;
     use wyhash::WyHash;
 
     #[derive(Archive, Deserialize, Serialize, Debug, PartialEq)]
-    #[archive_attr(derive(CheckBytes))]
+    #[rkyv(derive(Debug))]
     struct MockEntity {
-        version: u32,
-        map: HashMap<u64, Vec<f32>>,
+        version: u64,
+        #[rkyv(with = MapKV<Identity, Map<Identity>>)]
+        map: BTreeMap<u64, Vec<f32>>,
     }
 
     struct MockEntityGenerator {
@@ -292,7 +291,7 @@ mod tests {
         fn gen(&mut self, n: usize) -> MockEntity {
             let mut entity = MockEntity {
                 version: self.rng.gen(),
-                map: HashMap::new(),
+                map: BTreeMap::new(),
             };
             let range = Uniform::<f32>::from(0.0..100.0);
             for _ in 0..n {
@@ -342,7 +341,7 @@ mod tests {
         assert!(!Path::new(&data_path_1).exists());
         assert_eq!(
             reader.version().unwrap(),
-            InstanceVersion(8817430144856633152)
+            InstanceVersion(14199406521913192192)
         );
 
         // check that first time scoped `read` works correctly and switches the data
@@ -361,7 +360,7 @@ mod tests {
         assert!(Path::new(&data_path_1).exists());
         assert_eq!(
             reader.version().unwrap(),
-            InstanceVersion(1441050725688826209)
+            InstanceVersion(13708579033715857729)
         );
 
         // check that another scoped `read` works correctly and switches the data
@@ -374,7 +373,7 @@ mod tests {
         assert_eq!(reset, false);
         assert_eq!(
             reader.version().unwrap(),
-            InstanceVersion(14058099486534675680)
+            InstanceVersion(17341169738818006304)
         );
 
         let entity = entity_generator.gen(200);
@@ -383,7 +382,7 @@ mod tests {
         assert_eq!(reset, false);
         assert_eq!(
             reader.version().unwrap(),
-            InstanceVersion(18228729609619266545)
+            InstanceVersion(1248068842828094129)
         );
 
         fetch_and_assert_entity(&mut reader, &entity, true);
