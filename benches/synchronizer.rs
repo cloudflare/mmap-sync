@@ -32,7 +32,7 @@ fn build_mock_data() -> (HelloWorld, AlignedVec) {
 
 fn derive_shm_path(subpath: &str) -> String {
     const EV_NAME: &str = "MMAPSYNC_BM_ROOTDIR";
-    const DEFAULT_ROOT: &str = "/dev/shm"; // respect original functionality
+    const DEFAULT_ROOT: &str = "/tmp/hello_world"; // respect original functionality
 
     let selected_root: String = match env::var(EV_NAME) {
         Ok(val) => {
