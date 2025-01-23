@@ -215,18 +215,16 @@ fn main() {
                             .read::<Vec<BestBidAsk>>(true)
                             .expect("Failed to read data")
                     };
-
-                    let _ = &archived[0].best_bid;
+                    let _ = &archived.first().unwrap().best_bid;
 
                     let elapsed = start.elapsed().as_micros() as u64;
+                    last_version = current_version;
 
                     // store read latency
                     reader_results.lock().unwrap().push(elapsed);
-
-                    last_version = current_version;
                 }
 
-                // Sleep for a bit to avoid busy-waiting
+                // Sleep for a bit to avoid busy-waiting,
                 thread::sleep(Duration::from_micros(100));
                 // Check if writer is done AND there's no new version
                 if done_flag_clone.load(Ordering::SeqCst) {
