@@ -1,0 +1,20 @@
+➜  mmap-sync-bench git:(bench) ✗ cargo run --example  o1_synchronizer_market_data -r
+   Compiling mmap-sync v2.0.1 (/Users/TBGor/dev/mmap-sync-bench)
+    Finished `release` profile [optimized] target(s) in 3.85s
+     Running `target/release/examples/o1_synchronizer_market_data`
+=== Final Latency Results ===
+Writer operations: 10000
+  min:    109 us
+  max:    1711 us
+  mean:   127.6812000000 us
+  median: 124.0000000000 us
+  p95:    150.0000000000 us
+  p99:    170.0000000000 us
+Readers (aggregate) operations: 120000
+  min:    39 us
+  max:    2865 us
+  mean:   41.7561166667 us
+  median: 40.0000000000 us
+  p95:    46.0000000000 us
+  p99:    68.0000000000 us
+Benchmark completed.
