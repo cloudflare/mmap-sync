@@ -17,6 +17,13 @@ use wyhash::WyHash;
 use bytecheck::CheckBytes;
 use rkyv::{Archive, Deserialize, Serialize};
 
+// 预生成一次数据，避免每次迭代重复分配
+lazy_static! {
+    static ref TEST_DATA: Vec<BestBidAsk> = (0..1000)
+        .map(|_| generate_random_best_bid_ask())
+        .collect();
+}
+
 /// Example struct for the data to be shared
 #[derive(Archive, Deserialize, Serialize, Debug)]
 #[archive_attr(derive(CheckBytes))]
