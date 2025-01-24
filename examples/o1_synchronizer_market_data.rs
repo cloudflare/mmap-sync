@@ -155,13 +155,20 @@ fn main() {
     // `shm_path` is now a PathBuf
     let shm_path = Arc::new(shm_path); // Arc<PathBuf>
 
-    // 在 main 开头清理旧共享内存：
-let _ = fs::remove_file(&*shm_path);
 
-// 添加预热迭代（不记录延迟）：
-for _ in 0..1000 {
-    synchronizer.write(&data, ...).unwrap();
-}
+    // 预热阶段（不记录延迟）
+    const WARMUP_ITERATIONS: usize = 10_000;
+    let mut synchronizer = MySyncType::with_params(...);
+    for _ in 0..WARMUP_ITERATIONS {
+        synchronizer.write(&dummy_data, ...).unwrap();
+        let _ = synchronizer.read::<Data>();
+    }
+
+    // 重置同步器，确保正式测试从干净状态开始
+    drop(synchronizer);
+    let _ = fs::remove_file(&shm_path);
+    let synchronizer = MySyncType::with_params(...);
+
 
 
     // Add a shared 'done' flag so readers can stop
