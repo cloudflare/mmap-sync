@@ -1,5 +1,7 @@
 use mmap_sync::locks::SingleWriter;
 use mmap_sync::synchronizer::Synchronizer;
+use rand::thread_rng;
+use rand_distr::{Distribution, Exp};
 // We will explicitly use WyHash as our Hasher:
 use rand::Rng;
 use std::env;
@@ -38,6 +40,7 @@ pub struct BestBidAsk {
 
 const NUM_READERS: usize = 12;
 const NUM_ITERATIONS: usize = 10_000;
+const POISSON_RATE: f64 = 200.0; // λ = 200
 
 /// Derive a path for shared memory. By default, /tmp/mmap_sync_latency
 /// is used unless environment variable MMAPSYNC_BM_ROOTDIR is specified.
@@ -165,6 +168,12 @@ fn main() {
     let writer_handle = thread::spawn(move || {
         let mut synchronizer = MySyncType::with_params(shm_path_clone.as_os_str());
 
+        // -- Setup Poisson (exponential) distribution --
+        // Rate λ means "on average λ writes per second".
+        // So the exponential distribution yields inter-arrival times in seconds.
+        let exp_dist = Exp::new(POISSON_RATE).expect("Failed to create Exp distribution");
+        let mut rng = thread_rng();
+
         for _i in 0..NUM_ITERATIONS {
             // let data = generate_random_best_bid_ask();
             // * generate 1k random BestBidAsk data
@@ -182,6 +191,12 @@ fn main() {
 
             // Record writer's latency
             writer_results.lock().unwrap().push(elapsed);
+
+            // 3) Sleep for the next Poisson inter-arrival
+            //    exp_dist.sample() is in *seconds*, so convert to microseconds.
+            let delta_secs = exp_dist.sample(&mut rng);
+            let delta_micros = (delta_secs * 1_000_000.0) as u64;
+            thread::sleep(Duration::from_micros(delta_micros));
         }
 
         // After finishing all writes, set the 'done' flag:
