@@ -155,6 +155,15 @@ fn main() {
     // `shm_path` is now a PathBuf
     let shm_path = Arc::new(shm_path); // Arc<PathBuf>
 
+    // 在 main 开头清理旧共享内存：
+let _ = fs::remove_file(&*shm_path);
+
+// 添加预热迭代（不记录延迟）：
+for _ in 0..1000 {
+    synchronizer.write(&data, ...).unwrap();
+}
+
+
     // Add a shared 'done' flag so readers can stop
     let done_flag = Arc::new(AtomicBool::new(false));
 
