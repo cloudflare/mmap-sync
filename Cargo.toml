@@ -10,12 +10,27 @@ description = "A Rust package allowing sharing of data between processes in a wa
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/cloudflare/mmap-sync"
-keywords = ["memory-mapping", "synchronization", "interprocess", "wait-free", "zero-copy"]
-categories = ["os", "filesystem", "concurrency", "data-structures", "memory-management"]
+keywords = [
+    "memory-mapping",
+    "synchronization",
+    "interprocess",
+    "wait-free",
+    "zero-copy",
+]
+categories = [
+    "os",
+    "filesystem",
+    "concurrency",
+    "data-structures",
+    "memory-management",
+]
 
 [dependencies]
 bytecheck = { version = "~0.6.8", default-features = false }
+csv = "1.3.1"
 memmap2 = "0.9.4"
+nix = { version = "0.29.0", features = ["sched", "process"] }
+rand_distr = "0.4.3"
 rkyv = { version = "0.7.40", features = ["validation", "strict"] }
 thiserror = "1.0.30"
 wyhash = "0.5.0"
@@ -25,7 +40,11 @@ libc = "0.2.0"
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["html_reports"] }
-pprof = { version = "0.14.0", features = ["flamegraph", "protobuf-codec", "criterion"] }
+pprof = { version = "0.14.0", features = [
+    "flamegraph",
+    "protobuf-codec",
+    "criterion",
+] }
 proptest = "1.0.0"
 rand = "0.8.5"
 
@@ -35,3 +54,9 @@ harness = false
 
 [package.metadata.docs.rs]
 all-features = true
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
