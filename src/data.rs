@@ -8,6 +8,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use crate::instance::InstanceVersion;
 use crate::synchronizer::SynchronizerError;
 use crate::synchronizer::SynchronizerError::*;
+use crate::utils;
 
 /// Data container stores memory mapped data files allowing
 /// to switch between them when data instance version is changed
@@ -60,7 +61,7 @@ impl DataContainer {
             // grow data file when its current length exceeded
             let data_len = data.len() as u64;
             if data_len > data_file.metadata().map_err(FailedDataWrite)?.len() {
-                data_file.set_len(data_len).map_err(FailedDataWrite)?;
+                utils::set_len(&data_file, data_len as i64).map_err(FailedDataWrite)?;
             }
 
             *mmap = Some(unsafe { MmapMut::map_mut(&data_file).map_err(FailedDataWrite)? });
