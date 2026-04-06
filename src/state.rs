@@ -13,6 +13,7 @@ use crate::instance::InstanceVersion;
 use crate::locks::WriteLockStrategy;
 use crate::synchronizer::SynchronizerError;
 use crate::synchronizer::SynchronizerError::*;
+use crate::utils;
 
 const STATE_SIZE: usize = mem::size_of::<State>();
 
@@ -162,9 +163,7 @@ impl<'a, WL: WriteLockStrategy<'a>> StateContainer<WL> {
         let mut need_init = false;
         // Reset state file size to match exactly `STATE_SIZE`
         if state_file.metadata().map_err(FailedStateRead)?.len() != STATE_SIZE as u64 {
-            state_file
-                .set_len(STATE_SIZE as u64)
-                .map_err(FailedStateRead)?;
+            utils::set_len(&state_file, STATE_SIZE as i64).map_err(FailedStateRead)?;
             need_init = true;
         }
 
