@@ -109,10 +109,10 @@ where
     /// # Parameters
     /// - `entity`: The entity to be written to the data file.
     /// - `grace_duration`: The maximum period to wait for readers to finish before resetting the
-    ///                     reader count to 0. This handles scenarios where a reader process has
-    ///                     crashed or exited abnormally, failing to decrement the reader count.
-    ///                     After the `grace_duration` has elapsed, if there are still active
-    ///                     readers, the reader count is reset to 0 to restore synchronization state.
+    ///   reader count to 0. This handles scenarios where a reader process has crashed or exited
+    ///   abnormally, failing to decrement the reader count. After the `grace_duration` has
+    ///   elapsed, if there are still active readers, the reader count is reset to 0 to restore
+    ///   synchronization state.
     ///
     /// # Returns
     /// A result containing a tuple of the number of bytes written and a boolean indicating whether
@@ -201,9 +201,9 @@ where
     /// Reads and returns an `entity` struct from mapped memory wrapped in `ReadGuard`.
     ///
     /// # Parameters
-    /// - `check_bytes`: Whether to check that `entity` bytes can be safely read for type `T`,
-    ///                  `false` - bytes check will not be performed (faster, but less safe),
-    ///                  `true` - bytes check will be performed (slower, but safer).
+    /// - `check_bytes`: Enables `rkyv`'s check functionality, which performs a number of checks to
+    ///   validate that the underlying bytes can be safely read for type `T`. This check, however,
+    ///   can be slow.
     ///
     /// # Safety
     ///
