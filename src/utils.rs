@@ -14,5 +14,5 @@ pub(crate) fn set_len(file: &File, len: i64) -> Result<(), io::Error> {
     }
     // Support for non-Linux platforms is best-effort.
     #[cfg(not(target_os = "linux"))]
-    file.set_len(len).map_err(FailedStateRead)
+    file.set_len(len as u64)
 }
