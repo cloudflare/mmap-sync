@@ -8,10 +8,15 @@ use std::hash::{BuildHasher, BuildHasherDefault, Hasher};
 use std::time::Duration;
 
 use bytecheck::CheckBytes;
-use rkyv::ser::serializers::{AlignedSerializer, AllocSerializer};
-use rkyv::ser::Serializer;
-use rkyv::validation::validators::DefaultValidator;
-use rkyv::{archived_root, check_archived_root, AlignedVec, Archive, Serialize};
+use rkyv::api::high::{
+    to_bytes_in, to_bytes_in_with_alloc, to_bytes_with_alloc, HighDeserializer, HighSerializer,
+    HighValidator,
+};
+use rkyv::de::{Pool, Unpool};
+use rkyv::rancor::Strategy;
+use rkyv::ser::allocator::{Arena, ArenaHandle};
+use rkyv::util::AlignedVec;
+use rkyv::{access, access_unchecked, rancor, Archive, Deserialize, Serialize};
 use thiserror::Error;
 use wyhash::WyHash;
 
@@ -123,25 +128,20 @@ where
         grace_duration: Duration,
     ) -> Result<(usize, bool), SynchronizerError>
     where
-        T: Serialize<AllocSerializer<N>>,
-        T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
+        T: for<'b> Serialize<HighSerializer<AlignedVec, ArenaHandle<'b>, rancor::Error>>,
+        T::Archived: for<'b> CheckBytes<HighValidator<'b, rancor::Error>>,
     {
         let mut buf = self.serialize_buffer.take().ok_or(FailedEntityWrite)?;
         buf.clear();
 
         // serialize given entity into bytes
-        let mut serializer = AllocSerializer::new(
-            AlignedSerializer::new(buf),
-            Default::default(),
-            Default::default(),
-        );
-        let _ = serializer
-            .serialize_value(entity)
-            .map_err(|_| FailedEntityWrite)?;
-        let data = serializer.into_serializer().into_inner();
+        let mut allocator = Arena::new();
+        let data = to_bytes_in_with_alloc(entity, buf, allocator.acquire())
+            .map_err(|_err| SynchronizerError::FailedEntityWrite)?;
 
         // ensure that serialized bytes can be deserialized back to `T` struct successfully
-        check_archived_root::<T>(&data).map_err(|_| FailedEntityRead)?;
+        access::<T::Archived, rancor::Error>(&data)
+            .map_err(|_err| SynchronizerError::FailedEntityWrite)?;
 
         // fetch current state from mapped memory
         let state = self.state_container.state::<true>(true)?;
@@ -175,8 +175,9 @@ where
         grace_duration: Duration,
     ) -> Result<(usize, bool), SynchronizerError>
     where
-        T: Serialize<AllocSerializer<N>>,
-        T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
+        T: for<'b> Serialize<HighSerializer<AlignedVec, ArenaHandle<'b>, rancor::Error>>,
+        T::Archived: for<'b> CheckBytes<HighValidator<'b, rancor::Error>>
+            + Deserialize<T, Strategy<Pool, rancor::Error>>,
     {
         // fetch current state from mapped memory
         let state = self.state_container.state::<true>(true)?;
@@ -222,7 +223,9 @@ where
     ) -> Result<ReadResult<'a, T>, SynchronizerError>
     where
         T: Archive,
-        T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
+        T::Archived: for<'b> CheckBytes<HighValidator<'b, rancor::Error>>
+            + Deserialize<T, Strategy<Unpool, rancor::Error>>
+            + Deserialize<T, HighDeserializer<rancor::Error>>,
     {
         // fetch current state from mapped memory
         let state = self.state_container.state::<false>(false)?;
@@ -238,8 +241,8 @@ where
 
         // fetch entity from data using zero-copy deserialization
         let entity = match check_bytes {
-            false => archived_root::<T>(data),
-            true => check_archived_root::<T>(data).map_err(|_| FailedEntityRead)?,
+            false => unsafe { access_unchecked::<T::Archived>(data) },
+            true => access::<T::Archived, rancor::Error>(data).map_err(|_| FailedEntityRead)?,
         };
 
         Ok(ReadResult::new(guard, entity, switched))
@@ -264,18 +267,17 @@ mod tests {
     use bytecheck::CheckBytes;
     use rand::distributions::Uniform;
     use rand::prelude::*;
-    use rkyv::{Archive, Deserialize, Serialize};
-    use std::collections::HashMap;
+    use rkyv::{rancor, Archive, Archived, Deserialize, Serialize};
+    use std::collections::{BTreeMap, HashMap};
     use std::fs;
     use std::path::Path;
     use std::time::Duration;
     use wyhash::WyHash;
 
     #[derive(Archive, Deserialize, Serialize, Debug, PartialEq)]
-    #[archive_attr(derive(CheckBytes))]
     struct MockEntity {
         version: u32,
-        map: HashMap<u64, Vec<f32>>,
+        map: BTreeMap<u64, Vec<f32>>,
     }
 
     struct MockEntityGenerator {
@@ -292,7 +294,7 @@ mod tests {
         fn gen(&mut self, n: usize) -> MockEntity {
             let mut entity = MockEntity {
                 version: self.rng.gen(),
-                map: HashMap::new(),
+                map: BTreeMap::new(),
             };
             let range = Uniform::<f32>::from(0.0..100.0);
             for _ in 0..n {
@@ -342,7 +344,7 @@ mod tests {
         assert!(!Path::new(&data_path_1).exists());
         assert_eq!(
             reader.version().unwrap(),
-            InstanceVersion(8817430144856633152)
+            InstanceVersion(16625466833973030760)
         );
 
         // check that first time scoped `read` works correctly and switches the data
@@ -361,7 +363,7 @@ mod tests {
         assert!(Path::new(&data_path_1).exists());
         assert_eq!(
             reader.version().unwrap(),
-            InstanceVersion(1441050725688826209)
+            InstanceVersion(4843496054911424905)
         );
 
         // check that another scoped `read` works correctly and switches the data
@@ -374,7 +376,7 @@ mod tests {
         assert_eq!(reset, false);
         assert_eq!(
             reader.version().unwrap(),
-            InstanceVersion(14058099486534675680)
+            InstanceVersion(8474109838106832152)
         );
 
         let entity = entity_generator.gen(200);
@@ -383,7 +385,7 @@ mod tests {
         assert_eq!(reset, false);
         assert_eq!(
             reader.version().unwrap(),
-            InstanceVersion(18228729609619266545)
+            InstanceVersion(9943030984536513545)
         );
 
         fetch_and_assert_entity(&mut reader, &entity, true);
@@ -395,8 +397,11 @@ mod tests {
         expected_is_switched: bool,
     ) {
         let actual_entity = unsafe { synchronizer.read::<MockEntity>(false).unwrap() };
-        assert_eq!(actual_entity.map, expected_entity.map);
-        assert_eq!(actual_entity.version, expected_entity.version);
+        let deserialized: MockEntity =
+            rkyv::deserialize::<MockEntity, rancor::Error>(&*actual_entity).unwrap();
+
+        assert_eq!(deserialized.map, expected_entity.map);
+        assert_eq!(deserialized.version, expected_entity.version);
         assert_eq!(actual_entity.is_switched(), expected_is_switched);
     }
 

@@ -5,16 +5,18 @@ use std::time::Duration;
 use bytecheck::CheckBytes;
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use pprof::criterion::PProfProfiler;
-use rkyv::{AlignedVec, Archive, Deserialize, Serialize};
+use rkyv::rancor;
+use rkyv::util::AlignedVec;
+use rkyv::{Archive, Deserialize, Serialize};
 #[cfg(unix)]
 use wyhash::WyHash;
 
 #[cfg(unix)]
 use mmap_sync::locks::{LockDisabled, SingleWriter};
 use mmap_sync::synchronizer::Synchronizer;
+
 /// Example data-structure shared between writer and reader(s)
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq)]
-#[archive_attr(derive(CheckBytes))]
 pub struct HelloWorld {
     pub version: u32,
     pub messages: Vec<String>,
@@ -25,7 +27,7 @@ fn build_mock_data() -> (HelloWorld, AlignedVec) {
         version: 7,
         messages: vec!["Hello".to_string(), "World".to_string(), "!".to_string()],
     };
-    let bytes = rkyv::to_bytes::<HelloWorld, 1024>(&data).unwrap();
+    let bytes = rkyv::to_bytes::<rancor::Error>(&data).unwrap();
 
     (data, bytes)
 }
