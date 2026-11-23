@@ -126,7 +126,9 @@ where
         T: Serialize<AllocSerializer<N>>,
         T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
     {
-        let mut buf = self.serialize_buffer.take().ok_or(FailedEntityWrite)?;
+        // The buffer is put back only after a successful write, so after an earlier failed
+        // write it may be missing; start with a new one in that case.
+        let mut buf = self.serialize_buffer.take().unwrap_or_default();
         buf.clear();
 
         // serialize given entity into bytes
@@ -414,5 +416,26 @@ mod tests {
             writer2.write(&entity, Duration::from_secs(1)),
             Err(SynchronizerError::WriteLockConflict)
         ));
+    }
+
+    #[test]
+    fn single_writer_can_write_after_lock_is_released() {
+        static PATH: &str = "/tmp/synchronizer_single_writer_takeover";
+        let mut entity_generator = MockEntityGenerator::new(3);
+        let entity = entity_generator.gen(100);
+
+        let mut writer1 = Synchronizer::<WyHash, SingleWriter>::with_params(PATH.as_ref());
+        let mut writer2 = Synchronizer::<WyHash, SingleWriter>::with_params(PATH.as_ref());
+
+        writer1.write(&entity, Duration::from_secs(1)).unwrap();
+        assert!(matches!(
+            writer2.write(&entity, Duration::from_secs(1)),
+            Err(SynchronizerError::WriteLockConflict)
+        ));
+
+        // once the first writer is gone, the second one takes over
+        drop(writer1);
+        writer2.write(&entity, Duration::from_secs(1)).unwrap();
+        writer2.write(&entity, Duration::from_secs(1)).unwrap();
     }
 }
